@@ -1,0 +1,271 @@
+// svgwrite.nv — a document into text, without ever holding the text.
+//
+// TWO SHAPES, and the second is the one the plan's row asked for.
+// `to_string` builds the whole document and hands it back, which is
+// what a caller writing a 4-kilobyte chart wants.  `SvgWriter` hands
+// back one chunk at a time and keeps nothing: the caller appends each
+// chunk to its own buffer, its own socket or its own file, and a
+// scatter plot with a million points never exists as a string.  A
+// `core` package cannot write anywhere itself — that is what `core`
+// means — so "writing into the caller's buffer" is exactly this: the
+// package produces the bytes and the caller places them.
+//
+// THE CHUNK BOUNDARY IS ONE ELEMENT.  Not one byte, not a fixed size:
+// each `next_chunk` returns the complete text of the next element,
+// opening tag through closing tag for a leaf and opening tag alone for
+// a group.  That makes a chunk meaningful — a caller can count
+// elements, or stop between them — and it bounds the writer's memory at
+// the largest single element, which for a path is its `d` attribute.
+//
+// NUMBERS ARE THE WHOLE OF THE OUTPUT SIZE, so `decimals` is on the
+// style rather than fixed.  Three decimal places on a 1000-unit
+// viewBox is a thousandth of a pixel; most plots are readable at one.
+// Trailing zeroes are always dropped, so `2.500` is written `2.5` and
+// `2.000` is written `2`.
+//
+// WHAT IS ALWAYS WRITTEN and what is never written: an attribute whose
+// value is SVG's own default is OMITTED, because a document full of
+// `fill-rule="nonzero"` is a document nobody reads.  An attribute a
+// renderer needs to get the geometry right is always written, default
+// or not.  The two rules together are why a document written by this
+// package and read back gives the same tree, and why it is smaller than
+// the one that went in.
+//
+// NO EFFECTS.  This module produces text; it does not put it anywhere.
+
+use svgdoc
+use svgpath
+
+// How a document is written out.
+//
+// ```novo
+// use svgwrite
+//
+// fn main() [io]
+//     println("${svgwrite.pretty().decimals}")
+// ```
+pub struct SvgWriteStyle
+    // How many spaces one level of nesting is indented by.  Zero puts
+    // the whole document on one line.
+    indent: Int
+    // How many digits past the decimal point a number keeps.  Trailing
+    // zeroes are dropped regardless.
+    decimals: Int
+    // Whether to put a newline between elements.  False with an indent
+    // of zero is the smallest output this package produces.
+    newlines: Bool
+    // Whether to write the `<?xml ...?>` declaration.  Not required for
+    // an SVG served as `image/svg+xml` or embedded in HTML, and
+    // required by some older consumers, which is why it is a choice.
+    xml_declaration: Bool
+    // Whether path data uses the relative and shorthand commands where
+    // they are shorter.  The geometry is identical either way; see
+    // `svgpath.to_string_compact`.
+    compact_paths: Bool
+
+// Indented, three decimals, newlines, no XML declaration.
+//
+// What a document meant to be read by a person should use.
+//
+// ```novo
+// use svgwrite
+//
+// fn main() [io]
+//     println("${svgwrite.pretty().indent}")
+// ```
+pub fn pretty() -> SvgWriteStyle
+    todo("svg-nv.svgwrite.pretty")
+
+// No indent, no newlines, two decimals, compact paths.
+//
+// What a document meant to be sent over a wire should use.
+//
+// ```novo
+// use svgwrite
+//
+// fn main() [io]
+//     println("${svgwrite.minimal().indent}")
+// ```
+pub fn minimal() -> SvgWriteStyle
+    todo("svg-nv.svgwrite.minimal")
+
+// The whole document as one string.
+//
+// ```novo
+// use svgwrite
+// use svgdoc
+//
+// fn main() [io]
+//     match svgwrite.to_string(svgdoc.document(10.0, 10.0, []), svgwrite.pretty())
+//         Ok(s)  => println(s)
+//         Err(_) => println("refused")
+// ```
+pub fn to_string(doc: SvgDocument, style: SvgWriteStyle) -> Result<Str, SvgFault>
+    todo("svg-nv.svgwrite.to_string")
+
+// One element of a document, and everything under it, as one string.
+//
+// For a caller assembling a document out of parts it renders
+// separately, and for a test that wants to see one node.
+//
+// ```novo
+// use svgwrite
+// use svgdoc
+//
+// fn main() [io]
+//     match svgwrite.node_to_string(svgdoc.group([]), svgwrite.pretty())
+//         Ok(s)  => println(s)
+//         Err(_) => println("refused")
+// ```
+pub fn node_to_string(n: SvgNode, style: SvgWriteStyle) -> Result<Str, SvgFault>
+    todo("svg-nv.svgwrite.node_to_string")
+
+// A document being written out, one element at a time.
+//
+// Holds the walk's position and nothing else — never the text it has
+// produced, and never the text it is going to produce.
+//
+// ```novo
+// use svgwrite
+// use svgdoc
+//
+// fn main() [io]
+//     let w = svgwrite.writer(svgdoc.document(10.0, 10.0, []), svgwrite.minimal())
+//     println("${svgwrite.is_done(w)}")
+// ```
+pub struct SvgWriter
+    // The document being walked.
+    document: SvgDocument
+    // How it is being written.
+    style: SvgWriteStyle
+    // The path to the element the next chunk covers, as an index per
+    // level.  Empty means the walk has not started; the writer is done
+    // when `emitted` equals `total`.
+    cursor: [Int]
+    // How many elements have been handed out.
+    emitted: Int
+    // How many there are, counted once when the writer was made — so a
+    // caller can show progress without walking the tree itself.
+    total: Int
+
+// A writer positioned before the first chunk.
+//
+// ```novo
+// use svgwrite
+// use svgdoc
+//
+// fn main() [io]
+//     println("${svgwrite.writer(svgdoc.document(10.0, 10.0, []), svgwrite.minimal()).emitted}")
+// ```
+pub fn writer(doc: SvgDocument, style: SvgWriteStyle) -> SvgWriter
+    todo("svg-nv.svgwrite.writer")
+
+// The writer advanced past one element, and that element's text.
+//
+// The pair is the convention every streaming writer in Orbit uses: the
+// new state and the bytes it produced, so the caller decides where they
+// go.  On a writer that is already done the text is `""` and the writer
+// comes back unchanged, so a loop that over-runs its end stops rather
+// than failing.
+//
+// ```novo
+// use svgwrite
+// use svgdoc
+//
+// fn main() [io]
+//     let w = svgwrite.writer(svgdoc.document(10.0, 10.0, []), svgwrite.minimal())
+//     let (w2, chunk) = svgwrite.next_chunk(w)
+//     println("${svgwrite.is_done(w2)} ${chunk}")
+// ```
+pub fn next_chunk(w: SvgWriter) -> (SvgWriter, Str)
+    todo("svg-nv.svgwrite.next_chunk")
+
+// Whether the writer has handed out every element.
+//
+// ```novo
+// use svgwrite
+// use svgdoc
+//
+// fn main() [io]
+//     println("${svgwrite.is_done(svgwrite.writer(svgdoc.document(10.0, 10.0, []), svgwrite.minimal()))}")
+// ```
+pub fn is_done(w: SvgWriter) -> Bool
+    todo("svg-nv.svgwrite.is_done")
+
+// How far through the document the writer is, `0.0 ..= 1.0`.
+//
+// ```novo
+// use svgwrite
+// use svgdoc
+//
+// fn main() [io]
+//     println("${svgwrite.progress(svgwrite.writer(svgdoc.document(10.0, 10.0, []), svgwrite.minimal()))}")
+// ```
+pub fn progress(w: SvgWriter) -> Float
+    todo("svg-nv.svgwrite.progress")
+
+// A number as this package writes it: `decimals` digits past the point,
+// trailing zeroes dropped, and no exponent.
+//
+// Public because a caller building an attribute value by hand — a
+// gradient stop, an attribute this package does not model — has to
+// write numbers the same way or the document is inconsistent.  No
+// exponent is the load-bearing part: `1e-7` is a valid number in XML
+// and is NOT valid in an SVG attribute, and a naive float formatter
+// produces one.
+//
+// ```novo
+// use svgwrite
+//
+// fn main() [io]
+//     println(svgwrite.number(2.5000, 3))
+// ```
+pub fn number(v: Float, decimals: Int) -> Str
+    todo("svg-nv.svgwrite.number")
+
+// A string with XML's five predefined entities escaped.
+//
+// `&`, `<`, `>`, `"` and `'`.  Public for the same reason as `number`,
+// and because a text node whose content came from a data file is the
+// most likely place an unescaped `&` gets into a document.
+//
+// ```novo
+// use svgwrite
+//
+// fn main() [io]
+//     println(svgwrite.escape("a & b"))
+// ```
+pub fn escape(s: Str) -> Str
+    todo("svg-nv.svgwrite.escape")
+
+// A transform as SVG's `matrix(a b c d e f)`, or `""` for the identity.
+//
+// The empty string for the identity is what keeps a document free of
+// `transform="matrix(1 0 0 1 0 0)"` on every group — and the writer
+// omits the attribute entirely when this answers `""`.
+//
+// ```novo
+// use svgwrite
+// use svgdoc
+//
+// fn main() [io]
+//     println(svgwrite.transform_attr(svgdoc.no_transform(), 3))
+// ```
+pub fn transform_attr(t: SvgTransform, decimals: Int) -> Str
+    todo("svg-nv.svgwrite.transform_attr")
+
+// How many bytes the document would come to, without building it.
+//
+// Walks the tree and counts, which costs the same as writing it and
+// allocates nothing — for a caller that has to size a buffer, or decide
+// whether to send the SVG or a raster instead.
+//
+// ```novo
+// use svgwrite
+// use svgdoc
+//
+// fn main() [io]
+//     println("${svgwrite.byte_length(svgdoc.document(10.0, 10.0, []), svgwrite.minimal())}")
+// ```
+pub fn byte_length(doc: SvgDocument, style: SvgWriteStyle) -> Int
+    todo("svg-nv.svgwrite.byte_length")

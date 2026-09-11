@@ -1,0 +1,48 @@
+[package]
+name        = "svg-nv"
+version     = "0.0.1"
+description = "SVG as a value: a document tree of shapes with their presentation attributes, paths as a typed command list rather than a string, a writer that never holds the whole document, and a reader for the subset a program round-trips."
+license     = "Apache-2.0"
+
+# An INTERFACE release: every `pub fn` body is a `todo()`, so the
+# signatures and the effect rows are published and nothing is
+# implemented.  `novo pkg publish` recognises the shape and requires
+# both the draft stability and the 0.0.x version; the first
+# implementation is the 0.1.0 published over it.
+stability   = "draft"
+
+# `core`.  A document is a value, the writer hands back text a chunk at
+# a time, and the reader takes the text the caller already holds.
+# Nothing here opens a file — `image-io-nv` is the shelf that does, and
+# for a text format the caller almost always has the string anyway.
+layer       = "core"
+
+category    = "graphics"
+
+tags        = ["svg", "vector", "xml", "path", "usvg", "svgwrite", "drawing"]
+repository  = "https://github.com/novolang/svg-nv"
+maintainers = ["novo-lang"]
+novo        = ">= 0.8.9"
+
+# A library: no `main`, so `novo pkg build` type-checks and
+# effect-checks every module under `src/` and writes no binary.
+
+[docs.pages]
+"README.md" = "Reading and writing SVG as a value"
+
+[dependencies]
+# geometry-nv is a PATH while this lane develops the two together; the
+# coordinator converts it to `^0.0.1` before publish and publishes
+# geometry-nv first, because a package cannot be published ahead of what
+# it depends on.  The dependency is real rather than decorative: a
+# `transform` attribute is a `GeomXform`, a `viewBox` is a `GeomRectF`,
+# and `fill-rule` is its `GeomFillRule` — one fill rule in the registry
+# rather than two that have to agree.
+geometry-nv = "^0.0.1"
+
+# color-nv is published, so it is a range.  Under the caret rule
+# `^0.0.1` means exactly 0.0.1: a `0.0.x` version has no compatible
+# neighbours.  Every colour in an SVG document is its `Srgba8`, which is
+# also what png-nv, qoi-nv and image-nv speak — so a plot rendered to
+# SVG and the same plot rendered to a PNG cannot disagree about a shade.
+color-nv    = "^0.0.1"

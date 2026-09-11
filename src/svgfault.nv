@@ -1,0 +1,104 @@
+// svgfault.nv — what reading an SVG can go wrong on.
+//
+// EVERY VARIANT CARRIES A BYTE OFFSET into the input, because an error
+// in a 400-kilobyte document that does not say where is an error nobody
+// can act on.  The offset is into the ORIGINAL string the caller
+// handed over, so `str.slice` around it shows the reader what the
+// parser was looking at.
+//
+// WHAT IS NOT A FAULT is as much of the design as what is.  An element
+// this package does not model, an attribute it does not read, a CSS
+// block, a filter — none of them stops the parse.  They are SKIPPED,
+// and `svgread.parse_report` counts them, because a reader that refused
+// every document with a `<style>` block in it would refuse most SVGs in
+// the world.  A fault here means the input is not well-formed XML, or a
+// number where a number has to be is not one.
+//
+// NO EFFECTS.
+
+// What reading an SVG can go wrong on.
+//
+// ```novo
+// use svgfault
+//
+// fn main() [io]
+//     println("${svgfault.offset_of(SvgTruncated(0))}")
+// ```
+pub enum SvgFault
+    // The document ended in the middle of something: an unclosed tag,
+    // an unterminated attribute value, an unfinished entity.
+    SvgTruncated(offset: Int)
+    // A `<` that does not begin a tag this package can read, or a tag
+    // whose name is not a name.
+    SvgMalformedTag(offset: Int, found: Str)
+    // A closing tag that does not match the open one.
+    SvgMismatchedTag(offset: Int, opened: Str, closed: Str)
+    // An attribute that is not `name="value"`.
+    SvgMalformedAttribute(offset: Int, element: Str)
+    // An attribute whose value has to be a number and is not.
+    SvgBadNumber(offset: Int, attribute: Str, found: Str)
+    // A `d` attribute that is not a path: an unknown command letter, a
+    // command with the wrong number of arguments, an arc flag that is
+    // neither 0 nor 1.
+    SvgBadPathData(offset: Int, found: Str)
+    // A `transform` attribute whose function is not one of SVG's six,
+    // or has the wrong number of arguments.
+    SvgBadTransform(offset: Int, found: Str)
+    // A `viewBox` that is not four numbers.
+    SvgBadViewBox(offset: Int, found: Str)
+    // No `<svg>` element anywhere in the input.
+    SvgNoRootElement(offset: Int)
+    // An entity reference this package does not define.  The five XML
+    // predefined entities and numeric character references are read;
+    // a document that declares its own in a DOCTYPE is not.
+    SvgUnknownEntity(offset: Int, name: Str)
+    // The tree nested deeper than the reader's fixed limit.  A bound
+    // rather than a stack overflow: a `core` package with no allocator
+    // failure path would otherwise recurse until the process died on a
+    // document built to make it.
+    SvgTooDeep(offset: Int, limit: Int)
+
+// The rule every `SvgFault` is printed by: say what was expected, quote
+// what was found, and give the offset the reader can slice around.
+//
+// `Result<T, E>` requires `E: Error` (SPEC § 3.4), so this impl is what
+// makes every fallible signature in the package spellable.
+impl Error for SvgFault
+    fn message(self) -> Str
+        match self
+            SvgTruncated(at)                     =>
+                "the document ends inside an element, at byte ${at}"
+            SvgMalformedTag(at, found)           =>
+                "'${found}' at byte ${at} does not begin a tag"
+            SvgMismatchedTag(at, opened, closed) =>
+                "<${opened}> is closed by </${closed}> at byte ${at}"
+            SvgMalformedAttribute(at, element)   =>
+                "an attribute of <${element}> at byte ${at} is not name=\"value\""
+            SvgBadNumber(at, attribute, found)   =>
+                "${attribute}=\"${found}\" at byte ${at} is not a number"
+            SvgBadPathData(at, found)            =>
+                "'${found}' at byte ${at} is not a path command"
+            SvgBadTransform(at, found)           =>
+                "'${found}' at byte ${at} is not a transform function"
+            SvgBadViewBox(at, found)             =>
+                "viewBox=\"${found}\" at byte ${at} is not four numbers"
+            SvgNoRootElement(at)                 =>
+                "no <svg> element, looking from byte ${at}"
+            SvgUnknownEntity(at, name)           =>
+                "&${name}; at byte ${at} is not an entity this reader defines"
+            SvgTooDeep(at, limit)                =>
+                "the tree nests deeper than ${limit} at byte ${at}"
+
+// Where in the input the fault was found.
+//
+// The one thing every variant has, pulled out so a caller can slice the
+// input without matching on eleven variants to find the number.
+//
+// ```novo
+// use svgfault
+//
+// fn main() [io]
+//     println("${svgfault.offset_of(SvgNoRootElement(0))}")
+// ```
+pub fn offset_of(f: SvgFault) -> Int
+    todo("svg-nv.svgfault.offset_of")

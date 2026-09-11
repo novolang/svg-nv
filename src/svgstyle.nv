@@ -1,0 +1,506 @@
+// svgstyle.nv — the presentation attributes every SVG element carries,
+// as one value.
+//
+// ONE STYLE FOR EVERY ELEMENT, not a different attribute set per shape.
+// SVG's presentation attributes are defined on the whole shape group:
+// `fill` applies to a circle, a path and a text run alike, and `stroke`
+// to a line and a rectangle alike.  A style per shape kind would be
+// five near-identical structs and a writer with five branches that do
+// the same thing.  So `SvgStyle` is one struct and `svgdoc.SvgNode`
+// carries exactly one of it.
+//
+// A STYLE IS ABSOLUTE, NOT INHERITED.  SVG inherits presentation
+// attributes down the tree, and a reader that preserved that would hand
+// the caller a document in which no element knows how it looks without
+// a walk to the root.  This package's reader RESOLVES inheritance on
+// the way in — usvg's decision, and the reason usvg exists — so every
+// node in a parsed document carries the style it actually renders with.
+// The writer does not re-factor common attributes back onto the group
+// on the way out; that would be a size optimisation that changes what
+// the tree means.
+//
+// WHAT IS NOT HERE, and it is the honest list: gradients, patterns,
+// masks, clip paths, filters, markers and CSS.  A `url(#id)` paint is
+// PRESERVED as `SvgPaintRef` so a document that uses one round-trips
+// with its reference intact, and nothing in this package resolves it.
+// plot-nv needs none of them, and a renderer that does needs a
+// different package with a paint server in it.
+//
+// NO EFFECTS.
+
+use srgb
+
+// How the interior or the outline of a shape is filled in.
+//
+// ```novo
+// use svgstyle
+//
+// fn main() [io]
+//     println(svgstyle.paint_to_string(SvgPaintNone))
+// ```
+pub enum SvgPaint
+    // Nothing is drawn.  SVG's `none`, and the default `stroke` —
+    // which is why a shape with no style set is filled black and has no
+    // outline.
+    SvgPaintNone
+    // A flat colour with its own coverage.  `Srgba8` is color-nv's, so
+    // a colour that came out of a palette, a contrast check or a
+    // gradient ramp arrives here without a conversion.
+    SvgPaintColor(color: Srgba8)
+    // A reference to a paint server this package does not resolve —
+    // SVG's `url(#id)`, carrying the bare id.  The reader produces one
+    // rather than dropping the attribute, so a document that uses a
+    // gradient survives a round trip with its reference intact; a
+    // renderer that cannot resolve it treats it as `SvgPaintNone`.
+    SvgPaintRef(id: Str)
+
+// How an open stroke ends.
+//
+// ```novo
+// use svgstyle
+//
+// fn main() [io]
+//     println(svgstyle.cap_to_string(SvgCapButt))
+// ```
+pub enum SvgLineCap
+    // Cut off square at the endpoint.  SVG's default.
+    SvgCapButt
+    // A half-disc of the stroke's width past the endpoint.
+    SvgCapRound
+    // A square half the stroke's width past the endpoint.
+    SvgCapSquare
+
+// How two stroke segments meet.
+//
+// ```novo
+// use svgstyle
+//
+// fn main() [io]
+//     println(svgstyle.join_to_string(SvgJoinMiter))
+// ```
+pub enum SvgLineJoin
+    // Extended to a point, and cut off flat when that point would be
+    // further away than the miter limit.  SVG's default.
+    SvgJoinMiter
+    // Filled with an arc.
+    SvgJoinRound
+    // Cut off flat across the corner.
+    SvgJoinBevel
+
+// Which part of a text run sits at its anchor point.
+//
+// ```novo
+// use svgstyle
+//
+// fn main() [io]
+//     println(svgstyle.anchor_to_string(SvgAnchorMiddle))
+// ```
+pub enum SvgTextAnchor
+    // The run starts at the anchor.  SVG's default.
+    SvgAnchorStart
+    // The run is centred on it — what a plot's axis labels want.
+    SvgAnchorMiddle
+    // The run ends at it — what a plot's y-axis tick labels want.
+    SvgAnchorEnd
+
+// The unit a length is measured in.
+//
+// ```novo
+// use svgstyle
+//
+// fn main() [io]
+//     println(svgstyle.unit_suffix(SvgUnitPx))
+// ```
+pub enum SvgUnitKind
+    // No suffix: a number in the current user coordinate system, which
+    // the `viewBox` defines.  The one to use inside a document.
+    SvgUnitUser
+    // `px`.  Identical to a user unit in SVG 2, and written out because
+    // a round trip that silently dropped the suffix would not be one.
+    SvgUnitPx
+    // `%`, of the viewport's corresponding extent.
+    SvgUnitPercent
+    // `pt`, 1/72 inch.
+    SvgUnitPt
+    // `mm`.
+    SvgUnitMm
+    // `cm`.
+    SvgUnitCm
+    // `in`.
+    SvgUnitIn
+
+// A number with a unit: the `width`, `height` and `font-size` an SVG
+// document is measured in.
+//
+// ```novo
+// use svgstyle
+//
+// fn main() [io]
+//     println("${svgstyle.px(640.0).value}")
+// ```
+pub struct SvgLength
+    // How many of the unit.
+    value: Float
+    // Which unit.
+    unit: SvgUnitKind
+
+// What a text run is set in.
+//
+// A NAME AND A SIZE, and no font file anywhere.  Resolving a family
+// name to an outline needs a font database, which needs a filesystem,
+// which would put this package in `host`.  SVG itself defers the same
+// way: the document names a family and the renderer finds it.  The
+// consequence a caller has to know is that this package cannot measure
+// text — see `svgdoc.text_advance_estimate`.
+//
+// ```novo
+// use svgstyle
+//
+// fn main() [io]
+//     println("${svgstyle.default_font().size}")
+// ```
+pub struct SvgFontSpec
+    // The `font-family` list, as written: `"Helvetica, sans-serif"`.
+    family: Str
+    // The `font-size`, in user units.
+    size: Float
+    // The `font-weight` as a number: 400 is normal, 700 is bold.  The
+    // keywords `normal` and `bold` are read as those two numbers, so a
+    // caller compares one thing.
+    weight: Int
+    // Whether `font-style` is `italic`.  SVG's third value, `oblique`,
+    // is read as italic — the distinction needs a font file to mean
+    // anything, and this package has none.
+    italic: Bool
+
+// Everything about how one element looks.
+//
+// ```novo
+// use svgstyle
+//
+// fn main() [io]
+//     println("${svgstyle.plain().stroke_width}")
+// ```
+pub struct SvgStyle
+    // How the interior is filled.  SVG's default is opaque black,
+    // which is why a shape with no attributes at all is visible.
+    fill: SvgPaint
+    // How the outline is drawn.  SVG's default is `none`.
+    stroke: SvgPaint
+    // How wide the outline is, in user units.
+    stroke_width: Float
+    // How an open stroke ends.
+    stroke_cap: SvgLineCap
+    // How two segments meet.
+    stroke_join: SvgLineJoin
+    // How far a miter may extend before it is cut off flat, as a
+    // multiple of the stroke width.  SVG's default is 4.
+    miter_limit: Float
+    // The dash pattern: on, off, on, off, in user units.  Empty means a
+    // solid stroke.  An ODD-LENGTH pattern repeats to make an even one,
+    // which is SVG's rule and is worth knowing before a caller wonders
+    // why a three-element dash looks like six.
+    stroke_dash: [Float]
+    // How far into the dash pattern the stroke starts.
+    stroke_dash_offset: Float
+    // The whole element's opacity, `0.0 ..= 1.0`, applied on top of
+    // whatever coverage the fill and stroke colours carry.
+    opacity: Float
+    // Which side of a self-crossing path is inside.  geometry-nv's
+    // type, so there is one fill rule in the registry rather than two
+    // that have to agree.
+    fill_rule: GeomFillRule
+    // What text is set in.  Ignored on a shape.
+    font: SvgFontSpec
+    // Where a text run sits relative to its anchor.  Ignored on a
+    // shape.
+    text_anchor: SvgTextAnchor
+
+// A style with SVG's own defaults: opaque black fill, no stroke.
+//
+// The style an element with no presentation attributes renders with, so
+// a document built from `plain()` and written out has no attributes in
+// it at all.
+//
+// ```novo
+// use svgstyle
+//
+// fn main() [io]
+//     println("${svgstyle.plain().opacity}")
+// ```
+pub fn plain() -> SvgStyle
+    todo("svg-nv.svgstyle.plain")
+
+// A style that fills with one colour and strokes nothing.
+//
+// ```novo
+// use svgstyle
+// use srgb
+//
+// fn main() [io]
+//     println("${svgstyle.filled(srgb.opaque(srgb.rgb8(255, 0, 0))).opacity}")
+// ```
+pub fn filled(color: Srgba8) -> SvgStyle
+    todo("svg-nv.svgstyle.filled")
+
+// A style that strokes with one colour and fills nothing.
+//
+// The one a plot's line series wants, and the one callers get wrong:
+// SVG's default fill is BLACK, so a polyline given only a stroke comes
+// out as a filled blob.
+//
+// ```novo
+// use svgstyle
+// use srgb
+//
+// fn main() [io]
+//     println("${svgstyle.stroked(srgb.opaque(srgb.rgb8(0, 0, 255)), 2.0).stroke_width}")
+// ```
+pub fn stroked(color: Srgba8, width: Float) -> SvgStyle
+    todo("svg-nv.svgstyle.stroked")
+
+// The same style with a different fill.
+//
+// ```novo
+// use svgstyle
+//
+// fn main() [io]
+//     println("${svgstyle.with_fill(svgstyle.plain(), SvgPaintNone).opacity}")
+// ```
+pub fn with_fill(s: SvgStyle, p: SvgPaint) -> SvgStyle
+    todo("svg-nv.svgstyle.with_fill")
+
+// The same style with a different stroke.
+//
+// ```novo
+// use svgstyle
+//
+// fn main() [io]
+//     println("${svgstyle.with_stroke(svgstyle.plain(), SvgPaintNone, 1.0).stroke_width}")
+// ```
+pub fn with_stroke(s: SvgStyle, p: SvgPaint, width: Float) -> SvgStyle
+    todo("svg-nv.svgstyle.with_stroke")
+
+// The same style with a dash pattern.
+//
+// ```novo
+// use svgstyle
+//
+// fn main() [io]
+//     println("${svgstyle.with_dash(svgstyle.plain(), [4.0, 2.0], 0.0).stroke_dash_offset}")
+// ```
+pub fn with_dash(s: SvgStyle, pattern: [Float], offset: Float) -> SvgStyle
+    todo("svg-nv.svgstyle.with_dash")
+
+// The same style with a different opacity.
+//
+// ```novo
+// use svgstyle
+//
+// fn main() [io]
+//     println("${svgstyle.with_opacity(svgstyle.plain(), 0.5).opacity}")
+// ```
+pub fn with_opacity(s: SvgStyle, opacity: Float) -> SvgStyle
+    todo("svg-nv.svgstyle.with_opacity")
+
+// The same style with a different font.
+//
+// ```novo
+// use svgstyle
+//
+// fn main() [io]
+//     println("${svgstyle.with_font(svgstyle.plain(), svgstyle.default_font()).font.size}")
+// ```
+pub fn with_font(s: SvgStyle, font: SvgFontSpec) -> SvgStyle
+    todo("svg-nv.svgstyle.with_font")
+
+// The same style with a different text anchor.
+//
+// ```novo
+// use svgstyle
+//
+// fn main() [io]
+//     let s = svgstyle.with_anchor(svgstyle.plain(), SvgAnchorMiddle)
+//     println(svgstyle.anchor_to_string(s.text_anchor))
+// ```
+pub fn with_anchor(s: SvgStyle, anchor: SvgTextAnchor) -> SvgStyle
+    todo("svg-nv.svgstyle.with_anchor")
+
+// SVG's default font: 16 user units of the generic sans-serif family,
+// normal weight, upright.
+//
+// ```novo
+// use svgstyle
+//
+// fn main() [io]
+//     println("${svgstyle.default_font().weight}")
+// ```
+pub fn default_font() -> SvgFontSpec
+    todo("svg-nv.svgstyle.default_font")
+
+// A font from its family, size and weight.
+//
+// ```novo
+// use svgstyle
+//
+// fn main() [io]
+//     println("${svgstyle.font("monospace", 12.0, 400, false).size}")
+// ```
+pub fn font(family: Str, size: Float, weight: Int, italic: Bool) -> SvgFontSpec
+    todo("svg-nv.svgstyle.font")
+
+// A length in user units — the one with no suffix.
+//
+// ```novo
+// use svgstyle
+//
+// fn main() [io]
+//     println("${svgstyle.user(640.0).value}")
+// ```
+pub fn user(value: Float) -> SvgLength
+    todo("svg-nv.svgstyle.user")
+
+// A length in pixels.
+//
+// ```novo
+// use svgstyle
+//
+// fn main() [io]
+//     println("${svgstyle.px(640.0).value}")
+// ```
+pub fn px(value: Float) -> SvgLength
+    todo("svg-nv.svgstyle.px")
+
+// A length as a percentage of the viewport.
+//
+// ```novo
+// use svgstyle
+//
+// fn main() [io]
+//     println("${svgstyle.percent(50.0).value}")
+// ```
+pub fn percent(value: Float) -> SvgLength
+    todo("svg-nv.svgstyle.percent")
+
+// A length as the number of user units it is worth, given how big the
+// viewport is on that axis.
+//
+// The one conversion this package can do without a device: a percentage
+// needs the viewport, and `pt`, `mm`, `cm` and `in` need SVG's fixed
+// 96-per-inch rule, which is a definition rather than a measurement.
+//
+// ```novo
+// use svgstyle
+//
+// fn main() [io]
+//     println("${svgstyle.to_user_units(svgstyle.percent(50.0), 640.0)}")
+// ```
+pub fn to_user_units(l: SvgLength, viewport_extent: Float) -> Float
+    todo("svg-nv.svgstyle.to_user_units")
+
+// The suffix a unit is written with — `""` for a user unit.
+//
+// ```novo
+// use svgstyle
+//
+// fn main() [io]
+//     println(svgstyle.unit_suffix(SvgUnitPercent))
+// ```
+pub fn unit_suffix(u: SvgUnitKind) -> Str
+    todo("svg-nv.svgstyle.unit_suffix")
+
+// A length as SVG writes it: the number and its suffix.
+//
+// ```novo
+// use svgstyle
+//
+// fn main() [io]
+//     println(svgstyle.length_to_string(svgstyle.px(640.0)))
+// ```
+pub fn length_to_string(l: SvgLength) -> Str
+    todo("svg-nv.svgstyle.length_to_string")
+
+// A paint as SVG writes it: `"none"`, `"#rrggbb"` or `"url(#id)"`.
+//
+// A colour whose coverage is not full writes as `#rrggbb` here and
+// carries its alpha in a separate `fill-opacity`, which is what SVG 1.1
+// requires and what every renderer reads.
+//
+// ```novo
+// use svgstyle
+//
+// fn main() [io]
+//     println(svgstyle.paint_to_string(SvgPaintNone))
+// ```
+pub fn paint_to_string(p: SvgPaint) -> Str
+    todo("svg-nv.svgstyle.paint_to_string")
+
+// A paint's coverage as SVG's separate opacity attribute, `0.0 ..= 1.0`.
+//
+// ```novo
+// use svgstyle
+//
+// fn main() [io]
+//     println("${svgstyle.paint_opacity(SvgPaintNone)}")
+// ```
+pub fn paint_opacity(p: SvgPaint) -> Float
+    todo("svg-nv.svgstyle.paint_opacity")
+
+// A line cap as SVG writes it.
+//
+// ```novo
+// use svgstyle
+//
+// fn main() [io]
+//     println(svgstyle.cap_to_string(SvgCapRound))
+// ```
+pub fn cap_to_string(c: SvgLineCap) -> Str
+    todo("svg-nv.svgstyle.cap_to_string")
+
+// A line join as SVG writes it.
+//
+// ```novo
+// use svgstyle
+//
+// fn main() [io]
+//     println(svgstyle.join_to_string(SvgJoinRound))
+// ```
+pub fn join_to_string(j: SvgLineJoin) -> Str
+    todo("svg-nv.svgstyle.join_to_string")
+
+// A text anchor as SVG writes it.
+//
+// ```novo
+// use svgstyle
+//
+// fn main() [io]
+//     println(svgstyle.anchor_to_string(SvgAnchorEnd))
+// ```
+pub fn anchor_to_string(a: SvgTextAnchor) -> Str
+    todo("svg-nv.svgstyle.anchor_to_string")
+
+// A fill rule as SVG writes it: `"nonzero"` or `"evenodd"`.
+//
+// ```novo
+// use svgstyle
+//
+// fn main() [io]
+//     println(svgstyle.fill_rule_to_string(GeomEvenOdd))
+// ```
+pub fn fill_rule_to_string(r: GeomFillRule) -> Str
+    todo("svg-nv.svgstyle.fill_rule_to_string")
+
+// Whether a style would draw anything at all: some fill, or some stroke
+// with a width.
+//
+// The check a writer makes before emitting an element, and one a caller
+// can make before building it.
+//
+// ```novo
+// use svgstyle
+//
+// fn main() [io]
+//     println("${svgstyle.is_visible(svgstyle.plain())}")
+// ```
+pub fn is_visible(s: SvgStyle) -> Bool
+    todo("svg-nv.svgstyle.is_visible")

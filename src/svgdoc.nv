@@ -1,0 +1,658 @@
+// svgdoc.nv — the document: a tree of shapes, each with its geometry,
+// its style and its transform.
+//
+// ONE NODE TYPE, NOT NINE.  Every SVG element that draws anything
+// carries the same three things — an id, a transform and the
+// presentation attributes — and differs only in the geometry.  So
+// `SvgNode` is a struct that holds those three plus an `SvgShape`, and
+// `SvgShape` is the enum that carries the numbers.  A variant per
+// element with the style repeated in each would be nine near-identical
+// payloads, a writer with nine branches doing the same attribute work,
+// and a reader that has to remember to handle `transform` nine times.
+//
+// THE BRIDGE TYPES, and they are the one thing to understand before
+// reading a signature here.  `SvgTransform` and `SvgViewBox` hold the
+// same numbers as geometry-nv's `GeomXform` and `GeomRectF`, and they
+// exist because those two are `@value` structs and a BOXED aggregate
+// cannot have an unboxed field (SPEC §14.5) — a document tree is boxed
+// by construction, since it nests.  So the tree carries the numbers and
+// `to_xform` / `of_xform` / `to_rect` / `of_rect` convert at the edge,
+// where the arithmetic starts.  The conversion is six field reads; what
+// it buys is that geometry-nv owns the transform algebra and this
+// package never reimplements it.
+//
+// THE SUBSET, stated plainly.  `svg`, `g`, `rect`, `circle`, `ellipse`,
+// `line`, `polyline`, `polygon`, `path` and `text` — the elements
+// plot-nv emits and the elements usvg keeps after it has resolved
+// everything else.  Not here: gradients, patterns, masks, clip paths,
+// filters, markers, `use`, `image`, `symbol`, `switch`, CSS and
+// animation.  A `url(#id)` paint survives as a reference nobody
+// resolves; everything else in that list is dropped by the reader and
+// cannot be constructed.
+//
+// NO EFFECTS.  A document is a value, and building one touches nothing.
+
+use geompoint
+use geomrect
+use geomxform
+use svgstyle
+use svgpath
+
+// A transform as a document carries it: SVG's six numbers.
+//
+// The boxed counterpart of geometry-nv's `GeomXform`, for the reason in
+// the header.  `to_xform` is how the arithmetic gets at it.
+//
+// ```novo
+// use svgdoc
+//
+// fn main() [io]
+//     println("${svgdoc.no_transform().a}")
+// ```
+pub struct SvgTransform
+    // Row 0, column 0.
+    a: Float
+    // Row 0, column 1.
+    b: Float
+    // Row 1, column 0.
+    c: Float
+    // Row 1, column 1.
+    d: Float
+    // The translation along x.
+    e: Float
+    // The translation along y.
+    f: Float
+
+// The user coordinate system a document's contents are drawn in.
+//
+// The boxed counterpart of a `GeomRectF`, and the field that makes an
+// SVG resolution-independent: the viewport is `width` by `height` in
+// real units, the contents are drawn in THIS rectangle, and the
+// renderer scales between them.
+//
+// ```novo
+// use svgdoc
+//
+// fn main() [io]
+//     println("${svgdoc.view_box(0.0, 0.0, 640.0, 480.0).width}")
+// ```
+pub struct SvgViewBox
+    // The left edge of the user coordinate system.
+    x: Float
+    // The top edge.
+    y: Float
+    // How wide it is.  Zero or negative disables rendering entirely,
+    // which is SVG's own rule rather than this package's.
+    width: Float
+    // How tall it is.
+    height: Float
+
+// What one element draws.
+//
+// ```novo
+// use svgdoc
+//
+// fn main() [io]
+//     println(svgdoc.shape_tag(SvgGroupShape))
+// ```
+pub enum SvgShape
+    // `<g>`: draws nothing itself, and exists to give its children a
+    // shared transform, style and id.
+    SvgGroupShape
+    // `<rect>`, with SVG's corner radii.  `rx` and `ry` of zero are
+    // square corners.
+    SvgRectShape(x: Float, y: Float, width: Float, height: Float, rx: Float, ry: Float)
+    // `<circle>`.
+    SvgCircleShape(cx: Float, cy: Float, r: Float)
+    // `<ellipse>`.
+    SvgEllipseShape(cx: Float, cy: Float, rx: Float, ry: Float)
+    // `<line>`.  Stroked only — a line has no interior, so its fill is
+    // never drawn however the style is set.
+    SvgLineShape(x1: Float, y1: Float, x2: Float, y2: Float)
+    // `<polyline>`: connected segments, not closed.  Its FILL still
+    // applies, which is SVG's most surprising rule and the reason
+    // `svgstyle.stroked` exists.
+    SvgPolylineShape(points: [GeomPointF])
+    // `<polygon>`: the same, closed.
+    SvgPolygonShape(points: [GeomPointF])
+    // `<path>`, as a typed command list.
+    SvgPathShape(path: SvgPath)
+    // `<text>`: one run, at one anchor point.  No `tspan`, no
+    // `textPath`, no wrapping — a document that needs a second line
+    // uses a second node, which is what a plot does anyway.
+    SvgTextShape(text: Str, x: Float, y: Float)
+
+// One element of a document.
+//
+// ```novo
+// use svgdoc
+//
+// fn main() [io]
+//     println("${svgdoc.child_count(svgdoc.group([]))}")
+// ```
+pub struct SvgNode
+    // What it draws.
+    shape: SvgShape
+    // How it looks.  ABSOLUTE, not inherited: see `svgstyle`'s header.
+    style: SvgStyle
+    // The element's own transform, applied to it and to its children.
+    // `svgdoc.no_transform()` when there is none, so that every node
+    // reads one shape rather than an optional.
+    transform: SvgTransform
+    // The `id` attribute, or `""`.  Kept because a `url(#id)` paint
+    // somewhere else in the document may name it, and because a caller
+    // that built the tree wants its own handles back.
+    id: Str
+    // The children.  Non-empty only on a `SvgGroupShape` — every other
+    // shape is a leaf, and the writer ignores children on one.
+    children: [SvgNode]
+
+// A whole document.
+//
+// ```novo
+// use svgdoc
+//
+// fn main() [io]
+//     println("${svgdoc.child_count_of(svgdoc.document(640.0, 480.0, []))}")
+// ```
+pub struct SvgDocument
+    // The viewport's width, with its unit.
+    width: SvgLength
+    // The viewport's height.
+    height: SvgLength
+    // The user coordinate system the contents are drawn in.
+    view_box: SvgViewBox
+    // The top-level elements.
+    children: [SvgNode]
+
+// A document `width` by `height` user units, with a `viewBox` matching.
+//
+// The constructor for the ordinary case — a drawing whose user units
+// ARE its pixels — so a caller who does not care about resolution
+// independence never meets a viewBox.
+//
+// ```novo
+// use svgdoc
+//
+// fn main() [io]
+//     println("${svgdoc.document(640.0, 480.0, []).view_box.width}")
+// ```
+pub fn document(width: Float, height: Float, children: [SvgNode]) -> SvgDocument
+    todo("svg-nv.svgdoc.document")
+
+// A document with its viewport and its user coordinate system named
+// separately.
+//
+// ```novo
+// use svgdoc
+// use svgstyle
+//
+// fn main() [io]
+//     let d = svgdoc.document_with(svgstyle.px(640.0), svgstyle.px(480.0),
+//                                  svgdoc.view_box(0.0, 0.0, 1.0, 1.0), [])
+//     println("${d.view_box.width}")
+// ```
+pub fn document_with(width: SvgLength, height: SvgLength, view_box: SvgViewBox,
+                     children: [SvgNode]) -> SvgDocument
+    todo("svg-nv.svgdoc.document_with")
+
+// A view box from four numbers.
+//
+// ```novo
+// use svgdoc
+//
+// fn main() [io]
+//     println("${svgdoc.view_box(0.0, 0.0, 640.0, 480.0).height}")
+// ```
+pub fn view_box(x: Float, y: Float, width: Float, height: Float) -> SvgViewBox
+    todo("svg-nv.svgdoc.view_box")
+
+// A view box as the rectangle it is.
+//
+// ```novo
+// use svgdoc
+// use geomrect
+//
+// fn main() [io]
+//     println("${geomrect.width(svgdoc.view_box_rect(svgdoc.view_box(0.0, 0.0, 4.0, 3.0)))}")
+// ```
+pub fn view_box_rect(v: SvgViewBox) -> GeomRectF
+    todo("svg-nv.svgdoc.view_box_rect")
+
+// A rectangle as a view box.
+//
+// ```novo
+// use svgdoc
+// use geomrect
+//
+// fn main() [io]
+//     println("${svgdoc.view_box_of(geomrect.of_xywh(0.0, 0.0, 4.0, 3.0)).width}")
+// ```
+pub fn view_box_of(r: GeomRectF) -> SvgViewBox
+    todo("svg-nv.svgdoc.view_box_of")
+
+// The transform that changes nothing.
+//
+// ```novo
+// use svgdoc
+//
+// fn main() [io]
+//     println("${svgdoc.no_transform().a}")
+// ```
+pub fn no_transform() -> SvgTransform
+    todo("svg-nv.svgdoc.no_transform")
+
+// A document transform as geometry-nv's, so the algebra applies.
+//
+// ```novo
+// use svgdoc
+// use geomxform
+//
+// fn main() [io]
+//     println("${geomxform.determinant(svgdoc.to_xform(svgdoc.no_transform()))}")
+// ```
+pub fn to_xform(t: SvgTransform) -> GeomXform
+    todo("svg-nv.svgdoc.to_xform")
+
+// A `GeomXform` as a document transform.
+//
+// ```novo
+// use svgdoc
+// use geomxform
+//
+// fn main() [io]
+//     println("${svgdoc.of_xform(geomxform.scaling(2.0, 2.0)).a}")
+// ```
+pub fn of_xform(x: GeomXform) -> SvgTransform
+    todo("svg-nv.svgdoc.of_xform")
+
+// A group of children, with the default style and no transform.
+//
+// ```novo
+// use svgdoc
+//
+// fn main() [io]
+//     println("${svgdoc.child_count(svgdoc.group([]))}")
+// ```
+pub fn group(children: [SvgNode]) -> SvgNode
+    todo("svg-nv.svgdoc.group")
+
+// A rectangle node.
+//
+// ```novo
+// use svgdoc
+// use svgstyle
+// use geomrect
+//
+// fn main() [io]
+//     let n = svgdoc.rect(geomrect.of_xywh(0.0, 0.0, 10.0, 10.0), svgstyle.plain())
+//     println(svgdoc.shape_tag(n.shape))
+// ```
+pub fn rect(r: GeomRectF, style: SvgStyle) -> SvgNode
+    todo("svg-nv.svgdoc.rect")
+
+// A rectangle node with rounded corners.
+//
+// ```novo
+// use svgdoc
+// use svgstyle
+// use geomrect
+//
+// fn main() [io]
+//     let n = svgdoc.rounded_rect(geomrect.of_xywh(0.0, 0.0, 10.0, 10.0), 2.0, 2.0,
+//                                 svgstyle.plain())
+//     println(svgdoc.shape_tag(n.shape))
+// ```
+pub fn rounded_rect(r: GeomRectF, rx: Float, ry: Float, style: SvgStyle) -> SvgNode
+    todo("svg-nv.svgdoc.rounded_rect")
+
+// A circle node.
+//
+// ```novo
+// use svgdoc
+// use svgstyle
+// use geompoint
+//
+// fn main() [io]
+//     let n = svgdoc.circle(geompoint.origin(), 5.0, svgstyle.plain())
+//     println(svgdoc.shape_tag(n.shape))
+// ```
+pub fn circle(center: GeomPointF, r: Float, style: SvgStyle) -> SvgNode
+    todo("svg-nv.svgdoc.circle")
+
+// An ellipse node.
+//
+// ```novo
+// use svgdoc
+// use svgstyle
+// use geompoint
+//
+// fn main() [io]
+//     let n = svgdoc.ellipse(geompoint.origin(), 5.0, 3.0, svgstyle.plain())
+//     println(svgdoc.shape_tag(n.shape))
+// ```
+pub fn ellipse(center: GeomPointF, rx: Float, ry: Float, style: SvgStyle) -> SvgNode
+    todo("svg-nv.svgdoc.ellipse")
+
+// A line node.
+//
+// ```novo
+// use svgdoc
+// use svgstyle
+// use geompoint
+//
+// fn main() [io]
+//     let n = svgdoc.line(geompoint.origin(), geompoint.ptf(10.0, 0.0), svgstyle.plain())
+//     println(svgdoc.shape_tag(n.shape))
+// ```
+pub fn line(from: GeomPointF, to: GeomPointF, style: SvgStyle) -> SvgNode
+    todo("svg-nv.svgdoc.line")
+
+// A polyline node: connected segments, not closed.
+//
+// ```novo
+// use svgdoc
+// use svgstyle
+// use geompoint
+//
+// fn main() [io]
+//     let ps = [geompoint.origin(), geompoint.ptf(10.0, 0.0)]
+//     println(svgdoc.shape_tag(svgdoc.polyline(ps, svgstyle.plain()).shape))
+// ```
+pub fn polyline(points: [GeomPointF], style: SvgStyle) -> SvgNode
+    todo("svg-nv.svgdoc.polyline")
+
+// A polygon node: the same, closed.
+//
+// ```novo
+// use svgdoc
+// use svgstyle
+// use geompoint
+//
+// fn main() [io]
+//     let ps = [geompoint.origin(), geompoint.ptf(10.0, 0.0), geompoint.ptf(0.0, 10.0)]
+//     println(svgdoc.shape_tag(svgdoc.polygon(ps, svgstyle.plain()).shape))
+// ```
+pub fn polygon(points: [GeomPointF], style: SvgStyle) -> SvgNode
+    todo("svg-nv.svgdoc.polygon")
+
+// A path node.
+//
+// ```novo
+// use svgdoc
+// use svgstyle
+// use svgpath
+//
+// fn main() [io]
+//     println(svgdoc.shape_tag(svgdoc.path(svgpath.empty(), svgstyle.plain()).shape))
+// ```
+pub fn path(p: SvgPath, style: SvgStyle) -> SvgNode
+    todo("svg-nv.svgdoc.path")
+
+// A text node: one run, at one anchor point.
+//
+// ```novo
+// use svgdoc
+// use svgstyle
+// use geompoint
+//
+// fn main() [io]
+//     let n = svgdoc.text("hello", geompoint.origin(), svgstyle.plain())
+//     println(svgdoc.shape_tag(n.shape))
+// ```
+pub fn text(content: Str, at: GeomPointF, style: SvgStyle) -> SvgNode
+    todo("svg-nv.svgdoc.text")
+
+// The same node with a transform on it.
+//
+// ```novo
+// use svgdoc
+// use geomxform
+//
+// fn main() [io]
+//     let n = svgdoc.with_transform(svgdoc.group([]), geomxform.translation(5.0, 0.0))
+//     println("${n.transform.e}")
+// ```
+pub fn with_transform(n: SvgNode, t: GeomXform) -> SvgNode
+    todo("svg-nv.svgdoc.with_transform")
+
+// The same node with an id.
+//
+// ```novo
+// use svgdoc
+//
+// fn main() [io]
+//     println(svgdoc.with_id(svgdoc.group([]), "axis").id)
+// ```
+pub fn with_id(n: SvgNode, id: Str) -> SvgNode
+    todo("svg-nv.svgdoc.with_id")
+
+// The same node with a different style.
+//
+// ```novo
+// use svgdoc
+// use svgstyle
+//
+// fn main() [io]
+//     let n = svgdoc.with_style(svgdoc.group([]), svgstyle.plain())
+//     println("${n.style.opacity}")
+// ```
+pub fn with_style(n: SvgNode, style: SvgStyle) -> SvgNode
+    todo("svg-nv.svgdoc.with_style")
+
+// The same node with one more child on the end.
+//
+// A child on a leaf shape is kept and never written, because silently
+// dropping it would make `add_child` a function that sometimes does
+// nothing.  `is_leaf` is the question to ask.
+//
+// ```novo
+// use svgdoc
+//
+// fn main() [io]
+//     println("${svgdoc.child_count(svgdoc.add_child(svgdoc.group([]), svgdoc.group([])))}")
+// ```
+pub fn add_child(parent: SvgNode, child: SvgNode) -> SvgNode
+    todo("svg-nv.svgdoc.add_child")
+
+// The same document with one more top-level element.
+//
+// ```novo
+// use svgdoc
+//
+// fn main() [io]
+//     let d = svgdoc.add(svgdoc.document(10.0, 10.0, []), svgdoc.group([]))
+//     println("${svgdoc.child_count_of(d)}")
+// ```
+pub fn add(doc: SvgDocument, child: SvgNode) -> SvgDocument
+    todo("svg-nv.svgdoc.add")
+
+// How many children a node has.
+//
+// ```novo
+// use svgdoc
+//
+// fn main() [io]
+//     println("${svgdoc.child_count(svgdoc.group([]))}")
+// ```
+pub fn child_count(n: SvgNode) -> Int
+    todo("svg-nv.svgdoc.child_count")
+
+// How many top-level elements a document has.
+//
+// ```novo
+// use svgdoc
+//
+// fn main() [io]
+//     println("${svgdoc.child_count_of(svgdoc.document(10.0, 10.0, []))}")
+// ```
+pub fn child_count_of(doc: SvgDocument) -> Int
+    todo("svg-nv.svgdoc.child_count_of")
+
+// How many nodes the whole subtree holds, this one included.
+//
+// ```novo
+// use svgdoc
+//
+// fn main() [io]
+//     println("${svgdoc.node_count(svgdoc.group([]))}")
+// ```
+pub fn node_count(n: SvgNode) -> Int
+    todo("svg-nv.svgdoc.node_count")
+
+// Whether the shape is one that can have children — which is only the
+// group.
+//
+// ```novo
+// use svgdoc
+//
+// fn main() [io]
+//     println("${svgdoc.is_leaf(svgdoc.group([]))}")
+// ```
+pub fn is_leaf(n: SvgNode) -> Bool
+    todo("svg-nv.svgdoc.is_leaf")
+
+// The element name a shape is written as: `"g"`, `"rect"`, `"path"`.
+//
+// ```novo
+// use svgdoc
+//
+// fn main() [io]
+//     println(svgdoc.shape_tag(SvgGroupShape))
+// ```
+pub fn shape_tag(s: SvgShape) -> Str
+    todo("svg-nv.svgdoc.shape_tag")
+
+// The node whose id is this, anywhere in the subtree, or the subtree's
+// own root when there is none.
+//
+// Not `?SvgNode`: a lookup that answers a node is what a caller wants,
+// and `has_id` is the question that separates "found it" from "did
+// not".  Two calls where a `match` would have been one, in exchange for
+// a return type a caller cannot forget to unwrap.
+//
+// ```novo
+// use svgdoc
+//
+// fn main() [io]
+//     println(svgdoc.find_by_id(svgdoc.group([]), "axis").id)
+// ```
+pub fn find_by_id(n: SvgNode, id: Str) -> SvgNode
+    todo("svg-nv.svgdoc.find_by_id")
+
+// Whether any node in the subtree carries this id.
+//
+// ```novo
+// use svgdoc
+//
+// fn main() [io]
+//     println("${svgdoc.has_id(svgdoc.group([]), "axis")}")
+// ```
+pub fn has_id(n: SvgNode, id: Str) -> Bool
+    todo("svg-nv.svgdoc.has_id")
+
+// Every node of the subtree, parents before children, as one list.
+//
+// The walk a renderer does, written once.  The transform on each node
+// is its OWN, not the accumulated one — `flatten_transforms` is what
+// accumulates.
+//
+// ```novo
+// use svgdoc
+// use std.list
+//
+// fn main() [io]
+//     println("${list.len(svgdoc.walk(svgdoc.group([])))}")
+// ```
+pub fn walk(n: SvgNode) -> [SvgNode]
+    todo("svg-nv.svgdoc.walk")
+
+// The same subtree with every transform composed down from the root and
+// every group's transform cleared.
+//
+// What a renderer with no transform stack wants, and what makes
+// `bounds` a straight walk.  The shapes themselves are NOT transformed
+// — their coordinates stay as written and the node's transform carries
+// the change, so the tree still round-trips.
+//
+// ```novo
+// use svgdoc
+//
+// fn main() [io]
+//     println("${svgdoc.node_count(svgdoc.flatten_transforms(svgdoc.group([])))}")
+// ```
+pub fn flatten_transforms(n: SvgNode) -> SvgNode
+    todo("svg-nv.svgdoc.flatten_transforms")
+
+// The smallest rectangle containing everything the subtree draws, in
+// the coordinate system the subtree's parent uses.
+//
+// TEXT IS ESTIMATED, not measured — see `text_advance_estimate` — so a
+// subtree containing text has approximate bounds and this is the one
+// place this package's answer is not exact.  A caller who needs the
+// real box measures the text with a font package and unions it in.
+//
+// ```novo
+// use svgdoc
+// use geomrect
+//
+// fn main() [io]
+//     println("${geomrect.is_empty(svgdoc.bounds(svgdoc.group([])))}")
+// ```
+pub fn bounds(n: SvgNode) -> GeomRectF
+    todo("svg-nv.svgdoc.bounds")
+
+// The smallest rectangle containing everything a document draws.
+//
+// ```novo
+// use svgdoc
+// use geomrect
+//
+// fn main() [io]
+//     println("${geomrect.is_empty(svgdoc.document_bounds(svgdoc.document(10.0, 10.0, [])))}")
+// ```
+pub fn document_bounds(doc: SvgDocument) -> GeomRectF
+    todo("svg-nv.svgdoc.document_bounds")
+
+// How wide a text run is likely to be, from its length and its font
+// size alone.
+//
+// AN ESTIMATE, AND IT SAYS SO IN ITS NAME.  Measuring text needs glyph
+// advances, which need a font file, which needs a filesystem — and this
+// package is `core`.  The number here is the length times the size
+// times a constant close to the average advance of a proportional Latin
+// face, which is right to within a fifth for ordinary text and wrong
+// for anything else.
+//
+// It exists because `bounds` has to return something for a text node,
+// and a silent zero would make a plot's auto-sized viewBox clip its own
+// axis labels.  A caller that needs the real width measures it and
+// unions it in.
+//
+// ```novo
+// use svgdoc
+//
+// fn main() [io]
+//     println("${svgdoc.text_advance_estimate("hello", 16.0)}")
+// ```
+pub fn text_advance_estimate(content: Str, font_size: Float) -> Float
+    todo("svg-nv.svgdoc.text_advance_estimate")
+
+// The whole subtree as one path, with every shape converted and every
+// transform applied.
+//
+// For a consumer with one primitive: a rasteriser, a plotter, a CNC
+// toolpath.  Text is DROPPED rather than converted, because turning a
+// string into outlines needs the font file this package does not have —
+// and dropping it visibly is better than emitting an empty path that
+// looks like a bug in the caller.
+//
+// ```novo
+// use svgdoc
+// use svgpath
+//
+// fn main() [io]
+//     println("${svgpath.command_count(svgdoc.to_path(svgdoc.group([])))}")
+// ```
+pub fn to_path(n: SvgNode) -> SvgPath
+    todo("svg-nv.svgdoc.to_path")

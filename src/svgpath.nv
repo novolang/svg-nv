@@ -1,0 +1,448 @@
+// svgpath.nv — a path as a typed command list, never as a string.
+//
+// THE `d` ATTRIBUTE IS A LANGUAGE, and treating it as one is the whole
+// point of this module.  `"M 0 0 L 10 0 l 0 10 z"` is a program: two
+// coordinate modes, five shorthand commands that borrow a control point
+// from the command before them, a number syntax that permits
+// `1.5.5` as two numbers, and an arc flag pair that may be written
+// without separators.  A package that stored that string would hand
+// every consumer the job of parsing it, and every consumer would do it
+// slightly differently.
+//
+// SO A PATH IS A LIST OF COMMANDS, AND THEY ARE ALL ABSOLUTE.  The
+// reader normalises on the way in — relative to absolute, `H`/`V` to
+// `SvgLineTo`, `S`/`T` to their long forms with the reflected control
+// point computed — so a program never meets a shorthand and never has
+// to track a current point to understand a command.  That is usvg's
+// decision and the reason usvg exists.
+//
+// WHAT THAT COSTS is size: a written-out path is longer than the one
+// that came in, because the shorthands exist to make it shorter.
+// `svgwrite` takes the size back by re-introducing relative commands
+// and the obvious shorthands when asked; nothing in the TREE is ever
+// shorthand.
+//
+// THE ARC SURVIVES, converted by nobody.  Most vector pipelines expand
+// SVG's elliptical arc into cubics on the way in, and a caller who wants
+// that has `to_cubics`.  It is not the default because an arc is
+// exactly representable and a cubic approximation is not: a round trip
+// through this package would silently change the geometry of every
+// rounded rectangle in a document.
+//
+// NO EFFECTS.
+
+use geompoint
+use geomrect
+
+// One step of a path, in absolute coordinates.
+//
+// ```novo
+// use svgpath
+//
+// fn main() [io]
+//     println("${svgpath.command_count(svgpath.empty())}")
+// ```
+pub enum SvgPathCmd
+    // Lift the pen and put it down at `(x, y)`, starting a new subpath.
+    SvgMoveTo(x: Float, y: Float)
+    // A straight line to `(x, y)`.  SVG's `H` and `V` are read as this,
+    // with the unchanged coordinate carried over.
+    SvgLineTo(x: Float, y: Float)
+    // A cubic Bezier to `(x, y)` with control points `(x1, y1)` and
+    // `(x2, y2)`.  SVG's `S` is read as this, with `(x1, y1)` the
+    // reflection of the previous curve's second control point.
+    SvgCubicTo(x1: Float, y1: Float, x2: Float, y2: Float, x: Float, y: Float)
+    // A quadratic Bezier to `(x, y)` with control point `(x1, y1)`.
+    // SVG's `T` is read as this, with the control point reflected.
+    SvgQuadTo(x1: Float, y1: Float, x: Float, y: Float)
+    // An elliptical arc to `(x, y)`: radii `rx` and `ry`, the ellipse's
+    // x-axis at `rotation` radians, and the two flags that pick which
+    // of the four arcs between the endpoints is meant.
+    //
+    // RADIANS, not the degrees the attribute is written in.  Every
+    // other angle in the drawing stack is radians, and a single
+    // attribute in degrees is a conversion somebody forgets; the reader
+    // and the writer do it at the text boundary, which is the only
+    // place it belongs.
+    SvgArcTo(rx: Float, ry: Float, rotation: Float, large_arc: Bool, sweep: Bool, x: Float,
+             y: Float)
+    // Close the current subpath with a straight line back to its
+    // starting point.  NOT the same as a `SvgLineTo` to that point: a
+    // closed subpath joins its ends with the style's line JOIN, and an
+    // open one caps them.
+    SvgClosePath
+
+// A path: its commands, in order.
+//
+// ```novo
+// use svgpath
+//
+// fn main() [io]
+//     println("${svgpath.command_count(svgpath.empty())}")
+// ```
+pub struct SvgPath
+    // The commands.  A path whose first command is not a `SvgMoveTo`
+    // draws nothing, which is SVG's own rule; `is_well_formed` is the
+    // check.
+    commands: [SvgPathCmd]
+
+// A path with no commands.
+//
+// ```novo
+// use svgpath
+//
+// fn main() [io]
+//     println("${svgpath.command_count(svgpath.empty())}")
+// ```
+pub fn empty() -> SvgPath
+    todo("svg-nv.svgpath.empty")
+
+// A path from a command list, as given.
+//
+// ```novo
+// use svgpath
+//
+// fn main() [io]
+//     println("${svgpath.command_count(svgpath.of_commands([SvgMoveTo(0.0, 0.0)]))}")
+// ```
+pub fn of_commands(commands: [SvgPathCmd]) -> SvgPath
+    todo("svg-nv.svgpath.of_commands")
+
+// The path with one more command on the end.
+//
+// The builder every other constructor here is written in terms of.
+//
+// ```novo
+// use svgpath
+//
+// fn main() [io]
+//     println("${svgpath.command_count(svgpath.push(svgpath.empty(), SvgClosePath))}")
+// ```
+pub fn push(p: SvgPath, c: SvgPathCmd) -> SvgPath
+    todo("svg-nv.svgpath.push")
+
+// The path with a `SvgMoveTo` on the end.
+//
+// ```novo
+// use svgpath
+//
+// fn main() [io]
+//     println("${svgpath.command_count(svgpath.move_to(svgpath.empty(), 0.0, 0.0))}")
+// ```
+pub fn move_to(p: SvgPath, x: Float, y: Float) -> SvgPath
+    todo("svg-nv.svgpath.move_to")
+
+// The path with a `SvgLineTo` on the end.
+//
+// ```novo
+// use svgpath
+//
+// fn main() [io]
+//     let p = svgpath.line_to(svgpath.move_to(svgpath.empty(), 0.0, 0.0), 10.0, 0.0)
+//     println("${svgpath.command_count(p)}")
+// ```
+pub fn line_to(p: SvgPath, x: Float, y: Float) -> SvgPath
+    todo("svg-nv.svgpath.line_to")
+
+// The path with a `SvgCubicTo` on the end.
+//
+// ```novo
+// use svgpath
+//
+// fn main() [io]
+//     let p = svgpath.cubic_to(svgpath.empty(), 0.0, 1.0, 1.0, 1.0, 1.0, 0.0)
+//     println("${svgpath.command_count(p)}")
+// ```
+pub fn cubic_to(p: SvgPath, x1: Float, y1: Float, x2: Float, y2: Float, x: Float,
+                y: Float) -> SvgPath
+    todo("svg-nv.svgpath.cubic_to")
+
+// The path with a `SvgQuadTo` on the end.
+//
+// ```novo
+// use svgpath
+//
+// fn main() [io]
+//     println("${svgpath.command_count(svgpath.quad_to(svgpath.empty(), 0.0, 1.0, 1.0, 0.0))}")
+// ```
+pub fn quad_to(p: SvgPath, x1: Float, y1: Float, x: Float, y: Float) -> SvgPath
+    todo("svg-nv.svgpath.quad_to")
+
+// The path with a `SvgArcTo` on the end.  `rotation` is in radians.
+//
+// ```novo
+// use svgpath
+//
+// fn main() [io]
+//     let p = svgpath.arc_to(svgpath.empty(), 5.0, 5.0, 0.0, false, true, 10.0, 0.0)
+//     println("${svgpath.command_count(p)}")
+// ```
+pub fn arc_to(p: SvgPath, rx: Float, ry: Float, rotation: Float, large_arc: Bool, sweep: Bool,
+              x: Float, y: Float) -> SvgPath
+    todo("svg-nv.svgpath.arc_to")
+
+// The path with a `SvgClosePath` on the end.
+//
+// ```novo
+// use svgpath
+//
+// fn main() [io]
+//     println("${svgpath.command_count(svgpath.close(svgpath.empty()))}")
+// ```
+pub fn close(p: SvgPath) -> SvgPath
+    todo("svg-nv.svgpath.close")
+
+// A path tracing a rectangle, optionally with rounded corners.
+//
+// `rx` and `ry` of zero give four lines and a close; anything larger
+// gives four lines and four arcs, clamped to half the rectangle's
+// extents the way SVG's own `<rect>` clamps them.
+//
+// ```novo
+// use svgpath
+// use geomrect
+//
+// fn main() [io]
+//     let p = svgpath.of_rect(geomrect.of_xywh(0.0, 0.0, 10.0, 10.0), 0.0, 0.0)
+//     println("${svgpath.command_count(p)}")
+// ```
+pub fn of_rect(r: GeomRectF, rx: Float, ry: Float) -> SvgPath
+    todo("svg-nv.svgpath.of_rect")
+
+// A path tracing an ellipse, as four arcs.
+//
+// ```novo
+// use svgpath
+// use geompoint
+//
+// fn main() [io]
+//     println("${svgpath.command_count(svgpath.of_ellipse(geompoint.origin(), 5.0, 3.0))}")
+// ```
+pub fn of_ellipse(center: GeomPointF, rx: Float, ry: Float) -> SvgPath
+    todo("svg-nv.svgpath.of_ellipse")
+
+// A path tracing a list of points: one move and then lines.
+//
+// `closed` decides whether a `SvgClosePath` ends it — which is the
+// difference between SVG's `<polyline>` and its `<polygon>`.
+//
+// ```novo
+// use svgpath
+// use geompoint
+//
+// fn main() [io]
+//     let ps = [geompoint.ptf(0.0, 0.0), geompoint.ptf(10.0, 0.0)]
+//     println("${svgpath.command_count(svgpath.of_points(ps, false))}")
+// ```
+pub fn of_points(points: [GeomPointF], closed: Bool) -> SvgPath
+    todo("svg-nv.svgpath.of_points")
+
+// How many commands the path has.
+//
+// ```novo
+// use svgpath
+//
+// fn main() [io]
+//     println("${svgpath.command_count(svgpath.empty())}")
+// ```
+pub fn command_count(p: SvgPath) -> Int
+    todo("svg-nv.svgpath.command_count")
+
+// The commands, in order.
+//
+// ```novo
+// use svgpath
+// use std.list
+//
+// fn main() [io]
+//     println("${list.len(svgpath.commands_of(svgpath.empty()))}")
+// ```
+pub fn commands_of(p: SvgPath) -> [SvgPathCmd]
+    todo("svg-nv.svgpath.commands_of")
+
+// How many subpaths the path has — one per `SvgMoveTo`.
+//
+// ```novo
+// use svgpath
+//
+// fn main() [io]
+//     println("${svgpath.subpath_count(svgpath.empty())}")
+// ```
+pub fn subpath_count(p: SvgPath) -> Int
+    todo("svg-nv.svgpath.subpath_count")
+
+// Whether the path starts with a `SvgMoveTo`, which is what SVG
+// requires for it to draw anything.
+//
+// ```novo
+// use svgpath
+//
+// fn main() [io]
+//     println("${svgpath.is_well_formed(svgpath.empty())}")
+// ```
+pub fn is_well_formed(p: SvgPath) -> Bool
+    todo("svg-nv.svgpath.is_well_formed")
+
+// Where the pen is after the last command, or the ORIGIN for an empty
+// path.
+//
+// ```novo
+// use svgpath
+//
+// fn main() [io]
+//     println("${svgpath.current_point(svgpath.empty()).x}")
+// ```
+pub fn current_point(p: SvgPath) -> GeomPointF
+    todo("svg-nv.svgpath.current_point")
+
+// The smallest rectangle containing every point the path passes
+// through.
+//
+// TIGHT, not the control-polygon box: a Bezier lies inside the hull of
+// its control points and usually well inside it, and a plot that sized
+// its viewBox from the loose box would leave a visible margin on one
+// side of every curve.  The cost is solving each segment's derivative
+// for its extrema, which is arithmetic and belongs here rather than in
+// every caller.
+//
+// ```novo
+// use svgpath
+// use geomrect
+//
+// fn main() [io]
+//     println("${geomrect.is_empty(svgpath.bounds(svgpath.empty()))}")
+// ```
+pub fn bounds(p: SvgPath) -> GeomRectF
+    todo("svg-nv.svgpath.bounds")
+
+// One run of the pen: the points between a `SvgMoveTo` and whatever
+// ended it.
+//
+// A NAMED TYPE RATHER THAN A LIST OF LISTS, for two reasons.  A
+// `[[GeomPointF]]` is refused outright — only the flat-buffer `[T]` has
+// an inline element layout, so a list of lists of an unboxed struct has
+// nowhere to put the elements (SPEC §14.6).  And it would lose
+// something real: `closed` is the difference between joining the two
+// ends of a run and capping them, which changes what a rasteriser
+// draws.
+//
+// ```novo
+// use svgpath
+//
+// fn main() [io]
+//     println("${svgpath.subpath_count(svgpath.empty())}")
+// ```
+pub struct SvgSubpath
+    // The points, in order, already subdivided.  The closing point of a
+    // closed run is NOT repeated at the end — `closed` says it is
+    // there.
+    points: [GeomPointF]
+    // Whether the run ended with a `SvgClosePath`.
+    closed: Bool
+
+// The path's points at `tolerance`, as straight segments.
+//
+// Every curve and arc subdivided until it is within `tolerance` of the
+// line through it, so a rasteriser, a hit test or a length measurement
+// has only segments to deal with.  One `SvgSubpath` per run of the pen,
+// because a single polyline joining two subpaths would draw a line that
+// is not in the path.
+//
+// ```novo
+// use svgpath
+// use std.list
+//
+// fn main() [io]
+//     println("${list.len(svgpath.flatten(svgpath.empty(), 0.1))}")
+// ```
+pub fn flatten(p: SvgPath, tolerance: Float) -> [SvgSubpath]
+    todo("svg-nv.svgpath.flatten")
+
+// The same path with every arc replaced by cubics.
+//
+// For a consumer whose renderer has no arc primitive — which is most of
+// them.  NOT done on the way in, because an arc is exactly
+// representable and its cubic approximation is not: doing it by default
+// would silently change the geometry of every rounded rectangle that
+// passed through this package.
+//
+// ```novo
+// use svgpath
+//
+// fn main() [io]
+//     println("${svgpath.command_count(svgpath.to_cubics(svgpath.empty()))}")
+// ```
+pub fn to_cubics(p: SvgPath) -> SvgPath
+    todo("svg-nv.svgpath.to_cubics")
+
+// The same path with every quadratic raised to a cubic.
+//
+// Exact — a quadratic IS a cubic with its control points at the two
+// thirds — so unlike `to_cubics` this one loses nothing.
+//
+// ```novo
+// use svgpath
+//
+// fn main() [io]
+//     println("${svgpath.command_count(svgpath.quads_to_cubics(svgpath.empty()))}")
+// ```
+pub fn quads_to_cubics(p: SvgPath) -> SvgPath
+    todo("svg-nv.svgpath.quads_to_cubics")
+
+// Every command's coordinates through an affine transform.
+//
+// An arc is the one that cannot simply be mapped: a non-uniform scale
+// or a rotation changes its radii and its x-axis angle, and a mirror
+// flips its sweep flag. This does that arithmetic rather than
+// approximating, so a transformed path is still exact.
+//
+// ```novo
+// use svgpath
+// use geomxform
+//
+// fn main() [io]
+//     println("${svgpath.command_count(svgpath.transform(svgpath.empty(), geomxform.identity()))}")
+// ```
+pub fn transform(p: SvgPath, t: GeomXform) -> SvgPath
+    todo("svg-nv.svgpath.transform")
+
+// How long the path is, measured at `tolerance`.
+//
+// ```novo
+// use svgpath
+//
+// fn main() [io]
+//     println("${svgpath.length(svgpath.empty(), 0.1)}")
+// ```
+pub fn length(p: SvgPath, tolerance: Float) -> Float
+    todo("svg-nv.svgpath.length")
+
+// The path as an SVG `d` attribute, absolute commands throughout.
+//
+// `decimals` says how many digits past the point each number keeps;
+// trailing zeroes are dropped, so `2.50` is written `2.5`.
+//
+// ```novo
+// use svgpath
+//
+// fn main() [io]
+//     println(svgpath.to_string(svgpath.empty(), 3))
+// ```
+pub fn to_string(p: SvgPath, decimals: Int) -> Str
+    todo("svg-nv.svgpath.to_string")
+
+// The path as a `d` attribute, choosing whichever of the absolute,
+// relative and shorthand spellings is shortest per command.
+//
+// The same geometry as `to_string` and typically a third fewer bytes,
+// which is what makes an SVG of a scatter plot with ten thousand points
+// worth sending. The tree is never shorthand; only this output is.
+//
+// ```novo
+// use svgpath
+//
+// fn main() [io]
+//     println(svgpath.to_string_compact(svgpath.empty(), 3))
+// ```
+pub fn to_string_compact(p: SvgPath, decimals: Int) -> Str
+    todo("svg-nv.svgpath.to_string_compact")

@@ -1,0 +1,553 @@
+// svg_tests.nv — the API suite for the document, the style and the
+// path.
+//
+// RED ON PURPOSE: every body is a `todo()`.
+//
+// WHERE THE CASES COME FROM.  usvg's contract, stated as assertions: a
+// parsed document carries absolute styles, paths are absolute and
+// shorthand-free, and a shape is still a shape.  Each case fixes a
+// small document and an exact answer, so the implementation lane has a
+// target rather than a description.
+//
+// THE ROW ON EVERY `@test` IS `[io]`, for `test.case` and nothing else
+// — which is the claim: an SVG writer that had needed to write
+// anywhere, or a reader that had needed to open anything, would have
+// put `[fs]` on this file and taken the package out of `core`.
+
+use std.test
+use std.list
+use geompoint
+use geomrect
+use geomxform
+use srgb
+use svgstyle
+use svgpath
+use svgdoc
+use svgwrite
+use svgread
+
+@test
+fn test_svgs_default_style_is_the_trap() [io]
+    test.case("a plain style fills opaque black and strokes nothing")
+    let p = svgstyle.plain()
+    test.assert(svgstyle.paint_to_string(p.fill) == "#000000")
+    test.assert(svgstyle.paint_to_string(p.stroke) == "none")
+
+    test.case("so a line series wants stroked(), not with_stroke on plain()")
+    let s = svgstyle.stroked(srgb.opaque(srgb.rgb8(0, 0, 255)), 2.0)
+    test.assert(svgstyle.paint_to_string(s.fill) == "none")
+    test.assert(s.stroke_width == 2.0)
+
+    test.case("and a filled shape strokes nothing")
+    let f = svgstyle.filled(srgb.opaque(srgb.rgb8(255, 0, 0)))
+    test.assert(svgstyle.paint_to_string(f.stroke) == "none")
+    test.assert(svgstyle.paint_to_string(f.fill) == "#ff0000")
+
+@test
+fn test_a_colours_alpha_travels_in_a_separate_attribute() [io]
+    test.case("SVG 1.1 has no eight-digit hex, so the paint is six digits")
+    let half = srgb.with_alpha(srgb.rgb8(255, 0, 0), 128)
+    test.assert(svgstyle.paint_to_string(SvgPaintColor(half)) == "#ff0000")
+
+    test.case("and the coverage comes out as a number for fill-opacity")
+    test.assert(svgstyle.paint_opacity(SvgPaintColor(half)) > 0.5019)
+    test.assert(svgstyle.paint_opacity(SvgPaintColor(half)) < 0.5020)
+
+    test.case("no paint has no opacity")
+    test.assert(svgstyle.paint_opacity(SvgPaintNone) == 0.0)
+
+@test
+fn test_a_paint_server_reference_survives_without_being_resolved() [io]
+    test.case("url(#id) reads back as a reference")
+    match svgread.parse_paint("url(#grad1)")
+        Ok(p)  => test.assert(svgstyle.paint_to_string(p) == "url(#grad1)")
+        Err(_) => test.assert(false)
+
+    test.case("and none reads as none")
+    match svgread.parse_paint("none")
+        Ok(p)  => test.assert(svgstyle.paint_to_string(p) == "none")
+        Err(_) => test.assert(false)
+
+    test.case("a named colour goes through color-nv, so the registry agrees on it")
+    match svgread.parse_paint("rebeccapurple")
+        Ok(p)  => test.assert(svgstyle.paint_to_string(p) == "#663399")
+        Err(_) => test.assert(false)
+
+@test
+fn test_lengths_carry_their_unit() [io]
+    test.case("a user unit has no suffix")
+    test.assert(svgstyle.length_to_string(svgstyle.user(640.0)) == "640")
+
+    test.case("a pixel keeps its px, so a round trip is one")
+    test.assert(svgstyle.length_to_string(svgstyle.px(640.0)) == "640px")
+
+    test.case("a percentage needs the viewport to become a number")
+    test.assert(svgstyle.to_user_units(svgstyle.percent(50.0), 640.0) == 320.0)
+
+    test.case("and an inch is 96 user units by definition")
+    match svgread.parse_length("1in")
+        Ok(l)  => test.assert(svgstyle.to_user_units(l, 0.0) == 96.0)
+        Err(_) => test.assert(false)
+
+@test
+fn test_a_path_is_commands_and_they_are_all_absolute() [io]
+    test.case("a relative lineto reads back as an absolute one")
+    match svgread.parse_path("M 10 10 l 5 0")
+        Ok(p)  =>
+            test.assert(svgpath.command_count(p) == 2)
+            test.case("at the absolute coordinate, not the relative one")
+            test.assert(svgpath.current_point(p).x == 15.0)
+        Err(_) => test.assert(false)
+
+    test.case("a horizontal lineto reads back as a lineto")
+    match svgread.parse_path("M 0 5 H 10")
+        Ok(p)  => test.assert(svgpath.current_point(p).y == 5.0)
+        Err(_) => test.assert(false)
+
+    test.case("and a smooth cubic reads back with its reflected control point")
+    match svgread.parse_path("M 0 0 C 0 1 1 1 1 0 S 2 -1 2 0")
+        Ok(p)  => test.assert(svgpath.command_count(p) == 3)
+        Err(_) => test.assert(false)
+
+@test
+fn test_a_path_must_start_with_a_move() [io]
+    test.case("SVG's own rule: a path that does not draws nothing")
+    test.assert(svgpath.is_well_formed(svgpath.empty()) == false)
+    test.assert(svgpath.is_well_formed(svgpath.line_to(svgpath.empty(), 1.0, 1.0)) == false)
+
+    test.case("one that does, is well formed")
+    test.assert(svgpath.is_well_formed(svgpath.move_to(svgpath.empty(), 0.0, 0.0)))
+
+    test.case("and an empty path's current point is the origin")
+    test.assert(svgpath.current_point(svgpath.empty()).x == 0.0)
+
+@test
+fn test_the_builders_agree_with_the_parser() [io]
+    test.case("a built path and a parsed one have the same commands")
+    let built = svgpath.line_to(svgpath.move_to(svgpath.empty(), 0.0, 0.0), 10.0, 0.0)
+    match svgread.parse_path("M 0 0 L 10 0")
+        Ok(p)  => test.assert(svgpath.command_count(p) == svgpath.command_count(built))
+        Err(_) => test.assert(false)
+
+    test.case("and writing the built one gives the text back")
+    test.assert(svgpath.to_string(built, 3) == "M0 0L10 0")
+
+    test.case("subpaths are counted by their moves")
+    let two = svgpath.move_to(svgpath.line_to(svgpath.move_to(svgpath.empty(), 0.0, 0.0),
+                                              1.0, 0.0),
+                                              5.0, 5.0)
+    test.assert(svgpath.subpath_count(two) == 2)
+
+@test
+fn test_path_bounds_are_tight_not_the_control_hull() [io]
+    test.case("a straight line's box is the line")
+    let l = svgpath.line_to(svgpath.move_to(svgpath.empty(), 0.0, 0.0), 10.0, 0.0)
+    test.assert(geomrect.width(svgpath.bounds(l)) == 10.0)
+    test.assert(geomrect.height(svgpath.bounds(l)) == 0.0)
+
+    test.case("a cubic stays inside its control points and the box says so")
+    // Control points reach y = 1, but the curve only reaches 3/4 of
+    // that.  A control-hull box would say 1.0 and be wrong by a third.
+    let c = svgpath.cubic_to(svgpath.move_to(svgpath.empty(), 0.0, 0.0),
+                             0.0, 1.0, 1.0, 1.0, 1.0, 0.0)
+    test.assert(geomrect.height(svgpath.bounds(c)) < 0.8)
+    test.assert(geomrect.height(svgpath.bounds(c)) > 0.7)
+
+    test.case("an empty path has an empty box")
+    test.assert(geomrect.is_empty(svgpath.bounds(svgpath.empty())))
+
+@test
+fn test_the_arc_survives_the_round_trip() [io]
+    test.case("an arc reads back as an arc, not as cubics")
+    match svgread.parse_path("M 0 0 A 5 5 0 0 1 10 0")
+        Ok(p)  =>
+            test.assert(svgpath.command_count(p) == 2)
+            test.case("and to_cubics is the explicit conversion, not the default")
+            test.assert(svgpath.command_count(svgpath.to_cubics(p)) > 2)
+        Err(_) => test.assert(false)
+
+    test.case("a rounded rectangle is lines and arcs")
+    let rr = svgpath.of_rect(geomrect.of_xywh(0.0, 0.0, 10.0, 10.0), 2.0, 2.0)
+    test.assert(svgpath.command_count(rr) > 5)
+
+    test.case("and a square one is four lines and a close")
+    let sq = svgpath.of_rect(geomrect.of_xywh(0.0, 0.0, 10.0, 10.0), 0.0, 0.0)
+    test.assert(svgpath.command_count(sq) == 6)
+
+@test
+fn test_flattening_keeps_the_subpaths_apart() [io]
+    test.case("two subpaths flatten to two runs")
+    let two = svgpath.line_to(svgpath.move_to(
+        svgpath.line_to(svgpath.move_to(svgpath.empty(), 0.0, 0.0), 1.0, 0.0),
+        5.0, 5.0),
+        6.0, 5.0)
+    test.assert(list.len(svgpath.flatten(two, 0.1)) == 2)
+
+    test.case("a closed run says so, because a join is not a cap")
+    let closed = svgpath.close(svgpath.line_to(svgpath.move_to(svgpath.empty(), 0.0, 0.0),
+                                               1.0, 0.0))
+    let runs = svgpath.flatten(closed, 0.1)
+    test.assert(runs[0].closed)
+
+    test.case("and the closing point is not repeated in the list")
+    test.assert(list.len(runs[0].points) == 2)
+
+@test
+fn test_transforming_a_path_is_exact_even_for_an_arc() [io]
+    test.case("a scale moves the endpoints")
+    let l = svgpath.line_to(svgpath.move_to(svgpath.empty(), 0.0, 0.0), 10.0, 0.0)
+    let t = svgpath.transform(l, geomxform.scaling(2.0, 2.0))
+    test.assert(svgpath.current_point(t).x == 20.0)
+
+    test.case("and an arc is still an arc afterwards, with its radii changed")
+    let a = svgpath.arc_to(svgpath.move_to(svgpath.empty(), 0.0, 0.0),
+                           5.0, 5.0, 0.0, false, true, 10.0, 0.0)
+    test.assert(svgpath.command_count(svgpath.transform(a, geomxform.scaling(2.0, 2.0))) == 2)
+
+    test.case("a quadratic raises to a cubic exactly, so nothing is lost")
+    let q = svgpath.quad_to(svgpath.move_to(svgpath.empty(), 0.0, 0.0), 0.0, 1.0, 1.0, 0.0)
+    let raised = svgpath.quads_to_cubics(q)
+    test.assert(svgpath.command_count(raised) == 2)
+    test.assert(geomrect.height(svgpath.bounds(raised)) == geomrect.height(svgpath.bounds(q)))
+
+@test
+fn test_a_node_is_a_shape_and_three_shared_things() [io]
+    test.case("every shape carries a style, a transform and an id")
+    let n = svgdoc.rect(geomrect.of_xywh(0.0, 0.0, 10.0, 10.0), svgstyle.plain())
+    test.assert(svgdoc.shape_tag(n.shape) == "rect")
+    test.assert(n.id == "")
+    test.assert(n.transform.a == 1.0)
+
+    test.case("and a group is the only one with children")
+    test.assert(svgdoc.is_leaf(n))
+    test.assert(svgdoc.is_leaf(svgdoc.group([])) == false)
+
+    test.case("the tags are SVG's element names")
+    test.assert(svgdoc.shape_tag(SvgGroupShape) == "g")
+    test.assert(svgdoc.shape_tag(svgdoc.circle(geompoint.origin(), 5.0,
+                                               svgstyle.plain()).shape) == "circle")
+    test.assert(svgdoc.shape_tag(svgdoc.path(svgpath.empty(),
+                                             svgstyle.plain()).shape) == "path")
+
+@test
+fn test_the_transform_bridge_goes_both_ways() [io]
+    test.case("a GeomXform into a document transform keeps its six numbers")
+    let x = geomxform.of_matrix(1.0, 2.0, 3.0, 4.0, 5.0, 6.0)
+    let t = svgdoc.of_xform(x)
+    test.assert(t.a == 1.0)
+    test.assert(t.f == 6.0)
+
+    test.case("and back out again unchanged")
+    test.assert(geomxform.near(svgdoc.to_xform(t), x, 0.000001))
+
+    test.case("the identity is what a node with no transform carries")
+    test.assert(geomxform.is_identity(svgdoc.to_xform(svgdoc.no_transform())))
+
+    test.case("the view box bridge is the same shape")
+    let r = geomrect.of_xywh(0.0, 0.0, 640.0, 480.0)
+    test.assert(geomrect.width(svgdoc.view_box_rect(svgdoc.view_box_of(r))) == 640.0)
+
+@test
+fn test_a_tree_can_be_walked_and_searched() [io]
+    test.case("a group of two leaves is three nodes")
+    let leaf = svgdoc.rect(geomrect.of_xywh(0.0, 0.0, 1.0, 1.0), svgstyle.plain())
+    let g = svgdoc.group([leaf, leaf])
+    test.assert(svgdoc.node_count(g) == 3)
+    test.assert(svgdoc.child_count(g) == 2)
+    test.assert(list.len(svgdoc.walk(g)) == 3)
+
+    test.case("an id can be found in the subtree")
+    let tagged = svgdoc.group([svgdoc.with_id(leaf, "bar-3")])
+    test.assert(svgdoc.has_id(tagged, "bar-3"))
+    test.assert(svgdoc.find_by_id(tagged, "bar-3").id == "bar-3")
+
+    test.case("and a missing id answers the root rather than a failure")
+    test.assert(svgdoc.has_id(tagged, "nope") == false)
+    test.assert(svgdoc.find_by_id(tagged, "nope").id == "")
+
+@test
+fn test_bounds_walk_the_transforms() [io]
+    test.case("a leaf's box is its own geometry")
+    let leaf = svgdoc.rect(geomrect.of_xywh(0.0, 0.0, 10.0, 10.0), svgstyle.plain())
+    test.assert(geomrect.width(svgdoc.bounds(leaf)) == 10.0)
+
+    test.case("a translated group moves its child's box")
+    let g = svgdoc.with_transform(svgdoc.group([leaf]), geomxform.translation(5.0, 0.0))
+    test.assert(svgdoc.bounds(g).min.x == 5.0)
+
+    test.case("flatten_transforms composes down without moving the shapes")
+    let flat = svgdoc.flatten_transforms(g)
+    test.assert(geomrect.width(svgdoc.bounds(flat)) == 10.0)
+
+    test.case("a document's box is the union of its children's")
+    let d = svgdoc.document(100.0, 100.0, [leaf])
+    test.assert(geomrect.width(svgdoc.document_bounds(d)) == 10.0)
+
+@test
+fn test_text_is_estimated_and_the_name_says_so() [io]
+    test.case("an estimate is proportional to the length and the size")
+    let one = svgdoc.text_advance_estimate("x", 16.0)
+    let ten = svgdoc.text_advance_estimate("xxxxxxxxxx", 16.0)
+    test.assert(ten > one * 9.0)
+
+    test.case("an empty run advances nothing")
+    test.assert(svgdoc.text_advance_estimate("", 16.0) == 0.0)
+
+    test.case("and it is non-zero, so an auto-sized viewBox does not clip its labels")
+    test.assert(one > 0.0)
+
+    test.case("to_path drops text rather than emitting an empty path for it")
+    let t = svgdoc.text("hello", geompoint.origin(), svgstyle.plain())
+    test.assert(svgpath.command_count(svgdoc.to_path(t)) == 0)
+
+@test
+fn test_a_document_rounds_through_the_writer_and_the_reader() [io]
+    test.case("an empty document writes an svg element with its viewBox")
+    let d = svgdoc.document(640.0, 480.0, [])
+    match svgwrite.to_string(d, svgwrite.minimal())
+        Ok(s)  =>
+            test.assert(str.contains(s, "viewBox=\"0 0 640 480\""))
+            test.case("and reads back with the same viewBox")
+            match svgread.parse(s)
+                Ok(back) => test.assert(back.view_box.width == 640.0)
+                Err(_)   => test.assert(false)
+        Err(_) => test.assert(false)
+
+    test.case("a rectangle survives as a rectangle, not as a path")
+    let r = svgdoc.rect(geomrect.of_xywh(1.0, 2.0, 3.0, 4.0), svgstyle.plain())
+    match svgwrite.to_string(svgdoc.document(10.0, 10.0, [r]), svgwrite.minimal())
+        Ok(s)  =>
+            match svgread.parse(s)
+                Ok(back) =>
+                    test.assert(svgdoc.shape_tag(svgdoc.walk(back.children[0])[0].shape) == "rect")
+                Err(_)   => test.assert(false)
+        Err(_) => test.assert(false)
+
+@test
+fn test_the_writer_omits_what_svg_already_defaults_to() [io]
+    test.case("a plain style writes no attributes at all")
+    let n = svgdoc.rect(geomrect.of_xywh(0.0, 0.0, 1.0, 1.0), svgstyle.plain())
+    match svgwrite.node_to_string(n, svgwrite.minimal())
+        Ok(s)  =>
+            test.assert(str.contains(s, "fill=") == false)
+            test.assert(str.contains(s, "fill-rule=") == false)
+        Err(_) => test.assert(false)
+
+    test.case("and the identity transform is not written")
+    match svgwrite.node_to_string(svgdoc.group([]), svgwrite.minimal())
+        Ok(s)  => test.assert(str.contains(s, "transform=") == false)
+        Err(_) => test.assert(false)
+
+    test.case("which is what transform_attr answering the empty string means")
+    test.assert(svgwrite.transform_attr(svgdoc.no_transform(), 3) == "")
+
+@test
+fn test_numbers_never_come_out_in_exponent_form() [io]
+    test.case("a valid XML number is not always a valid SVG one")
+    test.assert(str.contains(svgwrite.number(0.0000001, 9), "e") == false)
+
+    test.case("trailing zeroes are dropped")
+    test.assert(svgwrite.number(2.5000, 3) == "2.5")
+    test.assert(svgwrite.number(2.0, 3) == "2")
+
+    test.case("and decimals is a limit, not a padding")
+    test.assert(svgwrite.number(1.23456, 2) == "1.23")
+
+@test
+fn test_text_content_is_escaped() [io]
+    test.case("the five predefined entities")
+    test.assert(svgwrite.escape("a & b") == "a &amp; b")
+    test.assert(svgwrite.escape("<x>") == "&lt;x&gt;")
+
+    test.case("and a label out of a data file is the place it matters")
+    let t = svgdoc.text("R&D", geompoint.origin(), svgstyle.plain())
+    match svgwrite.node_to_string(t, svgwrite.minimal())
+        Ok(s)  => test.assert(str.contains(s, "&amp;"))
+        Err(_) => test.assert(false)
+
+@test
+fn test_the_streaming_writer_never_holds_the_document() [io]
+    test.case("a writer starts before the first element")
+    let d = svgdoc.document(10.0, 10.0, [svgdoc.group([])])
+    let w = svgwrite.writer(d, svgwrite.minimal())
+    test.assert(w.emitted == 0)
+    test.assert(svgwrite.is_done(w) == false)
+    test.assert(svgwrite.progress(w) == 0.0)
+
+    test.case("and each chunk is one element")
+    let (w2, first) = svgwrite.next_chunk(w)
+    test.assert(w2.emitted == 1)
+    test.assert(str.len(first) > 0)
+
+    test.case("a writer past its end answers the empty string rather than failing")
+    let (w3, _) = svgwrite.next_chunk(w2)
+    let (w4, more) = svgwrite.next_chunk(w3)
+    let (_, none) = svgwrite.next_chunk(w4)
+    test.assert(str.len(more) >= 0)
+    test.assert(none == "")
+
+    test.case("byte_length agrees with what to_string produces")
+    match svgwrite.to_string(d, svgwrite.minimal())
+        Ok(s)  => test.assert(svgwrite.byte_length(d, svgwrite.minimal()) == str.len(s))
+        Err(_) => test.assert(false)
+
+@test
+fn test_the_reader_skips_rather_than_refusing() [io]
+    test.case("a gradient is skipped and the document still parses")
+    let doc = "<svg width=\"10\" height=\"10\"><defs><linearGradient id=\"g\"/></defs>"
+              + "<rect width=\"5\" height=\"5\" fill=\"url(#g)\"/></svg>"
+    match svgread.parse_report(doc)
+        Ok(r)  =>
+            test.assert(r.skipped_elements > 0)
+            test.case("the url reference survives on the shape that used it")
+            test.assert(r.has_dangling_paint)
+            test.case("and the shape itself came through")
+            test.assert(svgdoc.child_count_of(r.document) > 0)
+        Err(_) => test.assert(false)
+
+    test.case("a CSS block does not stop the parse either")
+    match svgread.parse("<svg width=\"10\" height=\"10\"><style>rect{fill:red}</style></svg>")
+        Ok(_)  => test.assert(true)
+        Err(_) => test.assert(false)
+
+@test
+fn test_the_reader_refuses_what_is_actually_broken() [io]
+    test.case("an unclosed tag is truncated")
+    match svgread.parse("<svg width=\"10\" height=\"10\">")
+        Ok(_)  => test.assert(false)
+        Err(e) => test.assert(svgfault.offset_of(e) > 0)
+
+    test.case("a mismatched closing tag is named")
+    match svgread.parse("<svg width=\"1\" height=\"1\"><g></rect></svg>")
+        Ok(_)  => test.assert(false)
+        Err(e) => test.assert(svgfault.offset_of(e) > 0)
+
+    test.case("no root element is its own fault")
+    match svgread.parse("<html></html>")
+        Ok(_)  => test.assert(false)
+        Err(e) => test.assert(svgfault.offset_of(e) >= 0)
+
+    test.case("and a width that is not a number is refused where it stands")
+    match svgread.parse("<svg width=\"wide\" height=\"1\"/>")
+        Ok(_)  => test.assert(false)
+        Err(e) => test.assert(svgfault.offset_of(e) > 0)
+
+@test
+fn test_a_deep_document_is_bounded_rather_than_fatal() [io]
+    test.case("a nesting limit is a refusal, not a stack overflow")
+    let deep = "<svg width=\"1\" height=\"1\"><g><g><g><g></g></g></g></g></svg>"
+    match svgread.parse_within(deep, 2)
+        Ok(_)  => test.assert(false)
+        Err(e) => test.assert(svgfault.offset_of(e) > 0)
+
+    test.case("and the same document inside the limit is fine")
+    match svgread.parse_within(deep, 16)
+        Ok(_)  => test.assert(true)
+        Err(_) => test.assert(false)
+
+@test
+fn test_the_attribute_parsers_stand_alone() [io]
+    test.case("a transform attribute composes its functions left to right")
+    match svgread.parse_transform("translate(5 0) scale(2)")
+        Ok(t)  =>
+            test.assert(t.a == 2.0)
+            test.assert(t.e == 5.0)
+        Err(_) => test.assert(false)
+
+    test.case("a rotation in the text is degrees, and comes back as a matrix")
+    match svgread.parse_transform("rotate(90)")
+        Ok(t)  => test.assert(t.a < 0.000001)
+        Err(_) => test.assert(false)
+
+    test.case("a viewBox is four numbers")
+    match svgread.parse_view_box("0 0 640 480")
+        Ok(v)  => test.assert(v.height == 480.0)
+        Err(_) => test.assert(false)
+
+    test.case("a dash array comes back as written, odd length included")
+    match svgread.parse_dash_array("4 2 1")
+        Ok(d)  => test.assert(list.len(d) == 3)
+        Err(_) => test.assert(false)
+
+    test.case("none is an empty dash array")
+    match svgread.parse_dash_array("none")
+        Ok(d)  => test.assert(list.len(d) == 0)
+        Err(_) => test.assert(false)
+
+    test.case("and looks_like_svg is the cheap sniff")
+    test.assert(svgread.looks_like_svg("<svg/>"))
+    test.assert(svgread.looks_like_svg("{\"not\": \"svg\"}") == false)
+
+@test
+fn test_the_remaining_style_and_document_builders() [io]
+    test.case("the with_ family replaces one field and keeps the rest")
+    let s = svgstyle.plain()
+    test.assert(svgstyle.with_opacity(s, 0.5).opacity == 0.5)
+    test.assert(svgstyle.with_fill(s, SvgPaintNone).stroke_width == s.stroke_width)
+    test.assert(svgstyle.with_stroke(s, SvgPaintNone, 3.0).stroke_width == 3.0)
+    test.assert(list.len(svgstyle.with_dash(s, [4.0, 2.0], 1.0).stroke_dash) == 2)
+    test.assert(svgstyle.with_dash(s, [4.0], 1.0).stroke_dash_offset == 1.0)
+
+    test.case("fonts and anchors")
+    let f = svgstyle.font("monospace", 12.0, 700, false)
+    test.assert(svgstyle.with_font(s, f).font.weight == 700)
+    test.assert(svgstyle.default_font().size == 16.0)
+    test.assert(svgstyle.anchor_to_string(svgstyle.with_anchor(s, SvgAnchorMiddle).text_anchor)
+                == "middle")
+
+    test.case("the enum spellings are SVG's own")
+    test.assert(svgstyle.cap_to_string(SvgCapRound) == "round")
+    test.assert(svgstyle.join_to_string(SvgJoinBevel) == "bevel")
+    test.assert(svgstyle.anchor_to_string(SvgAnchorEnd) == "end")
+    test.assert(svgstyle.fill_rule_to_string(GeomEvenOdd) == "evenodd")
+    test.assert(svgstyle.unit_suffix(SvgUnitUser) == "")
+    test.assert(svgstyle.unit_suffix(SvgUnitPercent) == "%")
+
+    test.case("and a style that draws nothing says so")
+    test.assert(svgstyle.is_visible(svgstyle.plain()))
+    test.assert(svgstyle.is_visible(svgstyle.with_fill(s, SvgPaintNone)) == false)
+
+@test
+fn test_the_remaining_node_and_path_constructors() [io]
+    let st = svgstyle.plain()
+    let ps = [geompoint.origin(), geompoint.ptf(10.0, 0.0), geompoint.ptf(0.0, 10.0)]
+
+    test.case("every shape has a constructor and a tag")
+    test.assert(svgdoc.shape_tag(svgdoc.rounded_rect(
+        geomrect.of_xywh(0.0, 0.0, 1.0, 1.0), 1.0, 1.0, st).shape) == "rect")
+    test.assert(svgdoc.shape_tag(svgdoc.ellipse(geompoint.origin(), 2.0, 1.0, st).shape)
+                == "ellipse")
+    test.assert(svgdoc.shape_tag(svgdoc.line(geompoint.origin(),
+                                             geompoint.ptf(1.0, 0.0), st).shape) == "line")
+    test.assert(svgdoc.shape_tag(svgdoc.polyline(ps, st).shape) == "polyline")
+    test.assert(svgdoc.shape_tag(svgdoc.polygon(ps, st).shape) == "polygon")
+    test.assert(svgdoc.shape_tag(svgdoc.text("x", geompoint.origin(), st).shape) == "text")
+
+    test.case("documents can be built up a child at a time")
+    let d = svgdoc.add(svgdoc.document(10.0, 10.0, []), svgdoc.group([]))
+    test.assert(svgdoc.child_count_of(d) == 1)
+    test.assert(svgdoc.child_count(svgdoc.add_child(svgdoc.group([]), svgdoc.group([]))) == 1)
+    test.assert(svgdoc.with_style(svgdoc.group([]), st).style.opacity == st.opacity)
+
+    test.case("document_with names the viewport and the user space separately")
+    let dw = svgdoc.document_with(svgstyle.px(640.0), svgstyle.px(480.0),
+                                  svgdoc.view_box(0.0, 0.0, 1.0, 1.0), [])
+    test.assert(dw.view_box.width == 1.0)
+    test.assert(dw.width.value == 640.0)
+
+    test.case("the path constructors and readers")
+    test.assert(svgpath.command_count(svgpath.of_commands([SvgMoveTo(0.0, 0.0)])) == 1)
+    test.assert(svgpath.command_count(svgpath.push(svgpath.empty(), SvgClosePath)) == 1)
+    test.assert(svgpath.command_count(svgpath.of_ellipse(geompoint.origin(), 5.0, 3.0)) > 4)
+    test.assert(svgpath.command_count(svgpath.of_points(ps, true)) == 4)
+    test.assert(list.len(svgpath.commands_of(svgpath.empty())) == 0)
+    test.assert(svgpath.length(svgpath.line_to(
+        svgpath.move_to(svgpath.empty(), 0.0, 0.0), 10.0, 0.0),
+        0.1) == 10.0)
+
+    test.case("and the compact spelling is shorter than the absolute one")
+    let long = svgpath.of_points(ps, true)
+    test.assert(str.len(svgpath.to_string_compact(long, 2)) <= str.len(svgpath.to_string(long, 2)))
+
+    test.case("pretty and minimal differ in indent")
+    test.assert(svgwrite.pretty().indent > svgwrite.minimal().indent)
