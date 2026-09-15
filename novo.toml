@@ -1,6 +1,6 @@
 [package]
 name        = "svg-nv"
-version     = "0.0.1"
+version     = "0.0.2"
 description = "SVG as a value: a document tree of shapes with their presentation attributes, paths as a typed command list rather than a string, a writer that never holds the whole document, and a reader for the subset a program round-trips."
 license     = "Apache-2.0"
 
