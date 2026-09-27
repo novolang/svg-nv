@@ -10,7 +10,6 @@
 
 use std.test
 use std.list
-use srgb
 use svgstyle
 use svgpath
 use svgdoc

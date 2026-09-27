@@ -34,7 +34,6 @@
 use svgdoc
 use svgpath
 use svgstyle
-use svgfault
 use geompoint
 use geomxform
 use srgb
@@ -276,6 +275,14 @@ fn skip_separators(s: Str, i: Int) -> Int
         j = j + 1
     j
 
+// The index of the first whitespace or comma at or after `i`, or the
+// end of `s`.
+fn token_end(s: Str, i: Int) -> Int
+    var j = i
+    while byte_of(s, j) >= 0 and not is_space(byte_of(s, j)) and byte_of(s, j) != ','
+        j = j + 1
+    j
+
 // How many bytes of whitespace start `s`.
 fn leading_space(s: Str) -> Int
     var j = 0
@@ -330,8 +337,7 @@ struct NumScan
 fn scan_numbers(s: Str) -> NumScan
     var vs: [Float] = []
     var i = skip_separators(s, 0)
-    let n = str.len(s)
-    while i < n
+    while byte_of(s, i) >= 0
         let end = number_end(s, i)
         if end < 0
             return NumScan { values: vs, bad: i }
@@ -399,11 +405,8 @@ fn dash_into(var out: [Float], s: Str, base: Int, extent: Float,
     if str.trim(s) == "none"
         return Ok()
     var i = skip_separators(s, 0)
-    let n = str.len(s)
-    while i < n
-        var j = i
-        while j < n and not is_space(byte_of(s, j)) and byte_of(s, j) != ','
-            j = j + 1
+    while byte_of(s, i) >= 0
+        let j = token_end(s, i)
         list.push(out, length_value(str.slice(s, i, j), base + i, "stroke-dasharray", extent,
                                     font_size)!)
         i = skip_separators(s, j)
@@ -461,10 +464,7 @@ struct PathScan
 
 // The text a path fault quotes: from `i` to the next separator.
 fn path_found(d: Str, i: Int) -> Str
-    var j = i + 1
-    while j < str.len(d) and not is_space(byte_of(d, j)) and byte_of(d, j) != ','
-        j = j + 1
-    str.slice(d, i, math.min(j, str.len(d)))
+    str.slice(d, i, math.min(token_end(d, i + 1), str.len(d)))
 
 fn path_fault(ps: PathScan, at: Int) -> SvgFault
     SvgBadPathData(ps.base + at, path_found(ps.d, at))
@@ -645,8 +645,7 @@ fn is_letter(b: Int) -> Bool
 fn transform_from(s: Str, base: Int) -> Result<SvgTransform, SvgFault>
     var acc = geomxform.identity()
     var i = skip_separators(s, 0)
-    let n = str.len(s)
-    while i < n
+    while byte_of(s, i) >= 0
         let start = i
         while is_letter(byte_of(s, i))
             i = i + 1
@@ -790,7 +789,7 @@ fn read_name(var sc: Scan) -> Str
 // sixteen bytes at most.
 fn found_at(s: Str, at: Int) -> Str
     var j = at + 1
-    while j < str.len(s) and j < at + 16 and not is_space(byte_of(s, j)) and byte_of(s, j) != '>'
+    while byte_of(s, j) >= 0 and j < at + 16 and not is_space(byte_of(s, j)) and byte_of(s, j) != '>'
         j = j + 1
     str.slice(s, at, math.min(j, str.len(s)))
 
@@ -845,10 +844,10 @@ fn decode(raw: Str, base: Int) -> Result<Str, SvgFault>
     var run = 0
     var i = 0
     let n = str.len(raw)
-    while i < n
+    while byte_of(raw, i) >= 0
         if byte_of(raw, i) == '&'
             var j = i + 1
-            while j < n and byte_of(raw, j) != ';' and (is_name_byte(byte_of(raw, j)) or byte_of(raw, j) == '#')
+            while is_name_byte(byte_of(raw, j)) or byte_of(raw, j) == '#'
                 j = j + 1
             let name = str.slice(raw, i + 1, j)
             let rep = entity_text(name) ?? "\u{0}"
@@ -1313,10 +1312,7 @@ fn first_length(el: XElem, name: Str, extent: Float, font_size: Float) -> Result
     match attr_of(el, name)
         Some(a) =>
             let first = str.trim(a.value)
-            var end = 0
-            while end < str.len(first) and not is_space(byte_of(first, end)) and byte_of(first, end) != ','
-                end = end + 1
-            length_value(str.slice(first, 0, end), a.at + leading_space(a.value), name, extent,
+            length_value(str.slice(first, 0, token_end(first, 0)), a.at + leading_space(a.value), name, extent,
                          font_size)
         None    => Ok(0.0)
 

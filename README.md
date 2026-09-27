@@ -275,7 +275,8 @@ none of that, keeps two decimals and compacts paths.
 ## Tests
 
 ```bash
-bash tests/coverage.sh    # every suite, and the line coverage of src/
+novo test tests/svg_tests.nv          # one suite; the table below lists them all
+bash tests/coverage.sh                # every suite, and the line coverage of src/
 ```
 
 | Suite | What it asserts |

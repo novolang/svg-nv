@@ -9,7 +9,6 @@
 // writer's chunks join to the same text as `to_string`.
 
 use std.test
-use std.list
 use geompoint
 use geomrect
 use geomxform
