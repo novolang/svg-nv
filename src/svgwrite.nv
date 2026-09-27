@@ -1,37 +1,30 @@
-// svgwrite.nv — a document into text, without ever holding the text.
+// svgwrite.nv — a document into text.
 //
-// TWO SHAPES, and the second is the one the plan's row asked for.
-// `to_string` builds the whole document and hands it back, which is
-// what a caller writing a 4-kilobyte chart wants.  `SvgWriter` hands
-// back one chunk at a time and keeps nothing: the caller appends each
-// chunk to its own buffer, its own socket or its own file, and a
-// scatter plot with a million points never exists as a string.  A
-// `core` package cannot write anywhere itself — that is what `core`
-// means — so "writing into the caller's buffer" is exactly this: the
-// package produces the bytes and the caller places them.
+// `to_string` builds the whole document and hands it back.  `SvgWriter`
+// hands it back one element at a time and keeps nothing it has written:
+// the caller appends each chunk to its own buffer, socket or file, and a
+// scatter plot with a million points never exists as one string.
 //
-// THE CHUNK BOUNDARY IS ONE ELEMENT.  Not one byte, not a fixed size:
-// each `next_chunk` returns the complete text of the next element,
-// opening tag through closing tag for a leaf and opening tag alone for
-// a group.  That makes a chunk meaningful — a caller can count
-// elements, or stop between them — and it bounds the writer's memory at
-// the largest single element, which for a path is its `d` attribute.
+// A chunk is one element: a leaf from its opening tag to its closing
+// tag, or a group's opening tag alone.  A chunk that finishes a group
+// also carries that group's closing tag, and the last chunk carries the
+// root's.  The writer's memory is bounded by the largest single element,
+// which for a path is its `d` attribute.
 //
-// NUMBERS ARE THE WHOLE OF THE OUTPUT SIZE, so `decimals` is on the
-// style rather than fixed.  Three decimal places on a 1000-unit
-// viewBox is a thousandth of a pixel; most plots are readable at one.
-// Trailing zeroes are always dropped, so `2.500` is written `2.5` and
-// `2.000` is written `2`.
+// `decimals` on the write style sets how many digits past the point a
+// number keeps.  Trailing zeroes are always dropped, so 2.500 is written
+// `2.5` and 2.000 is written `2`, and no number is written with an
+// exponent.
 //
-// WHAT IS ALWAYS WRITTEN and what is never written: an attribute whose
-// value is SVG's own default is OMITTED, because a document full of
-// `fill-rule="nonzero"` is a document nobody reads.  An attribute a
-// renderer needs to get the geometry right is always written, default
-// or not.  The two rules together are why a document written by this
-// package and read back gives the same tree, and why it is smaller than
-// the one that went in.
+// An attribute is left out when a reader would get the same value
+// without it.  An inherited presentation attribute is written where it
+// differs from the value at the parent, and every other attribute where
+// it differs from SVG's initial value.  A size a shape needs, such as a
+// rectangle's `width` or a circle's `r`, is always written.  So a
+// document written here and read back by `svgread` is the same tree.
 //
-// NO EFFECTS.  This module produces text; it does not put it anywhere.
+// No function here has an effect.  The module produces text and puts it
+// nowhere.
 
 use svgdoc
 use svgpath
@@ -47,18 +40,19 @@ use svgnum
 //     println("${svgwrite.pretty().decimals}")
 // ```
 pub struct SvgWriteStyle
-    // How many spaces one level of nesting is indented by.  Zero puts
-    // the whole document on one line.
+    // How many spaces one level of nesting is indented by, at the start
+    // of each line.  It has no effect when `newlines` is false, since
+    // the document is then one line.
     indent: Int
     // How many digits past the decimal point a number keeps.  Trailing
     // zeroes are dropped regardless.
     decimals: Int
-    // Whether to put a newline between elements.  False with an indent
-    // of zero is the smallest output this package produces.
+    // Whether each element ends its line.  False is the smallest
+    // output this package produces.
     newlines: Bool
-    // Whether to write the `<?xml ...?>` declaration.  Not required for
-    // an SVG served as `image/svg+xml` or embedded in HTML, and
-    // required by some older consumers, which is why it is a choice.
+    // Whether to write the `<?xml ...?>` declaration first.  An SVG
+    // served as `image/svg+xml` or embedded in HTML does not need one,
+    // and some older consumers do.
     xml_declaration: Bool
     // Whether path data uses the relative and shorthand commands where
     // they are shorter.  The geometry is identical either way; see
@@ -95,6 +89,10 @@ pub fn minimal() -> SvgWriteStyle
 
 // The whole document as one string.
 //
+// A value that is not finite has no SVG spelling, and a document holding
+// one is refused with `SvgBadNumber` at the offset its attribute would
+// have had.
+//
 // ```novo
 // use svgwrite
 // use svgdoc
@@ -119,7 +117,9 @@ pub fn to_string(doc: SvgDocument, style: SvgWriteStyle) -> Result<Str, SvgFault
 // One element of a document, and everything under it, as one string.
 //
 // For a caller assembling a document out of parts it renders
-// separately, and for a test that wants to see one node.
+// separately, and for a test that wants to see one node.  The node is
+// written as a child of the root, so its inherited attributes are
+// compared with SVG's initial values.
 //
 // ```novo
 // use svgwrite
@@ -135,8 +135,8 @@ pub fn node_to_string(n: SvgNode, style: SvgWriteStyle) -> Result<Str, SvgFault>
 
 // A document being written out, one element at a time.
 //
-// Holds the walk's position and nothing else — never the text it has
-// produced, and never the text it is going to produce.
+// It holds the walk's position and the document, and none of the text
+// it has handed out.
 //
 // ```novo
 // use svgwrite
@@ -152,8 +152,8 @@ pub struct SvgWriter
     // How it is being written.
     style: SvgWriteStyle
     // The path to the element the next chunk covers, as an index per
-    // level.  Empty means the walk has not started; the writer is done
-    // when `emitted` equals `total`.
+    // level.  It is empty before the first chunk and after the last;
+    // the writer is done when `emitted` equals `total`.
     cursor: [Int]
     // How many elements have been handed out.
     emitted: Int
@@ -176,11 +176,15 @@ pub fn writer(doc: SvgDocument, style: SvgWriteStyle) -> SvgWriter
 
 // The writer advanced past one element, and that element's text.
 //
-// The pair is the convention every streaming writer in Orbit uses: the
-// new state and the bytes it produced, so the caller decides where they
-// go.  On a writer that is already done the text is `""` and the writer
-// comes back unchanged, so a loop that over-runs its end stops rather
-// than failing.
+// The answer is the new state and the text it produced, so the caller
+// decides where the text goes.  The first chunk is the root's opening
+// tag.  A chunk that finishes a group carries the group's closing tag,
+// and the last chunk carries the root's.  On a writer that is already
+// done the text is `""` and the writer comes back unchanged.
+//
+// This form cannot refuse, so a value that is not finite is written as
+// `NaN`, `inf` or `-inf`, which no reader accepts; `to_string` refuses
+// the same document.
 //
 // ```novo
 // use svgwrite
@@ -252,12 +256,11 @@ pub fn progress(w: SvgWriter) -> Float
 // A number as this package writes it: `decimals` digits past the point,
 // trailing zeroes dropped, and no exponent.
 //
-// Public because a caller building an attribute value by hand — a
-// gradient stop, an attribute this package does not model — has to
-// write numbers the same way or the document is inconsistent.  No
-// exponent is the load-bearing part: `1e-7` is a valid number in XML
-// and is NOT valid in an SVG attribute, and a naive float formatter
-// produces one.
+// A caller building an attribute this package does not model uses it
+// to spell numbers the same way.  The value is rounded half away from
+// zero, and a value that rounds to zero has no sign.  `decimals` is
+// taken as at most 12, about what a double carries.  A value that is not
+// finite is written as `NaN`, `inf` or `-inf`.
 //
 // ```novo
 // use svgwrite
@@ -270,9 +273,9 @@ pub fn number(v: Float, decimals: Int) -> Str
 
 // A string with XML's five predefined entities escaped.
 //
-// `&`, `<`, `>`, `"` and `'`.  Public for the same reason as `number`,
-// and because a text node whose content came from a data file is the
-// most likely place an unescaped `&` gets into a document.
+// `&`, `<`, `>`, `"` and `'` become `&amp;`, `&lt;`, `&gt;`, `&quot;`
+// and `&apos;`.  The writer escapes every attribute value and every text
+// run with it.
 //
 // ```novo
 // use svgwrite
@@ -293,9 +296,9 @@ pub fn escape(s: Str) -> Str
 
 // A transform as SVG's `matrix(a b c d e f)`, or `""` for the identity.
 //
-// The empty string for the identity is what keeps a document free of
-// `transform="matrix(1 0 0 1 0 0)"` on every group — and the writer
-// omits the attribute entirely when this answers `""`.
+// A transform whose six numbers are written `1 0 0 1 0 0` at
+// `decimals` is the identity, and the writer leaves the attribute out
+// when this answers `""`.
 //
 // ```novo
 // use svgwrite
@@ -313,9 +316,10 @@ pub fn transform_attr(t: SvgTransform, decimals: Int) -> Str
 
 // How many bytes the document would come to, without building it.
 //
-// Walks the tree and counts, which costs the same as writing it and
-// allocates nothing — for a caller that has to size a buffer, or decide
-// whether to send the SVG or a raster instead.
+// It runs the streaming writer and adds up its chunks, so it costs what
+// writing costs and never holds more than one element's text.  For a
+// caller that has to size a buffer, or decide whether to send the SVG or
+// a raster instead.
 //
 // ```novo
 // use svgwrite

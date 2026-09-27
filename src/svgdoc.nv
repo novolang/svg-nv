@@ -1,36 +1,25 @@
 // svgdoc.nv — the document: a tree of shapes, each with its geometry,
 // its style and its transform.
 //
-// ONE NODE TYPE, NOT NINE.  Every SVG element that draws anything
-// carries the same three things — an id, a transform and the
-// presentation attributes — and differs only in the geometry.  So
-// `SvgNode` is a struct that holds those three plus an `SvgShape`, and
-// `SvgShape` is the enum that carries the numbers.  A variant per
-// element with the style repeated in each would be nine near-identical
-// payloads, a writer with nine branches doing the same attribute work,
-// and a reader that has to remember to handle `transform` nine times.
+// Every SVG element that draws anything carries an id, a transform and
+// the presentation attributes, and differs from the others only in its
+// geometry.  So `SvgNode` holds those three and an `SvgShape`, and
+// `SvgShape` is the enum that carries the geometry.
 //
-// THE BRIDGE TYPES, and they are the one thing to understand before
-// reading a signature here.  `SvgTransform` and `SvgViewBox` hold the
-// same numbers as geometry-nv's `GeomXform` and `GeomRectF`, and they
-// exist because those two are `@value` structs and a BOXED aggregate
-// cannot have an unboxed field (SPEC §14.5) — a document tree is boxed
-// by construction, since it nests.  So the tree carries the numbers and
-// `to_xform` / `of_xform` / `to_rect` / `of_rect` convert at the edge,
-// where the arithmetic starts.  The conversion is six field reads; what
-// it buys is that geometry-nv owns the transform algebra and this
-// package never reimplements it.
+// `SvgTransform` and `SvgViewBox` hold the same numbers as geometry-nv's
+// `GeomXform` and `GeomRectF`.  Those two are `@value` structs, and a
+// boxed aggregate such as a tree node cannot hold an unboxed field (SPEC
+// section 14.5).  So the tree carries the numbers, and `to_xform`,
+// `of_xform`, `view_box_rect` and `view_box_of` convert where the
+// arithmetic starts.  geometry-nv owns the transform algebra.
 //
-// THE SUBSET, stated plainly.  `svg`, `g`, `rect`, `circle`, `ellipse`,
-// `line`, `polyline`, `polygon`, `path` and `text` — the elements
-// plot-nv emits and the elements usvg keeps after it has resolved
-// everything else.  Not here: gradients, patterns, masks, clip paths,
-// filters, markers, `use`, `image`, `symbol`, `switch`, CSS and
-// animation.  A `url(#id)` paint survives as a reference nobody
-// resolves; everything else in that list is dropped by the reader and
-// cannot be constructed.
+// The elements modelled are `svg`, `g`, `rect`, `circle`, `ellipse`,
+// `line`, `polyline`, `polygon`, `path` and `text`.  Gradients, patterns,
+// masks, clip paths, filters, markers, `use`, `image`, `symbol`,
+// `switch`, CSS and animation cannot be constructed, and the reader
+// skips them.
 //
-// NO EFFECTS.  A document is a value, and building one touches nothing.
+// No function here has an effect.
 
 use geompoint
 use geomrect
@@ -65,10 +54,9 @@ pub struct SvgTransform
 
 // The user coordinate system a document's contents are drawn in.
 //
-// The boxed counterpart of a `GeomRectF`, and the field that makes an
-// SVG resolution-independent: the viewport is `width` by `height` in
-// real units, the contents are drawn in THIS rectangle, and the
-// renderer scales between them.
+// The boxed counterpart of a `GeomRectF`.  The viewport is `width` by
+// `height` in real units, the contents are drawn in this rectangle, and
+// the renderer scales between the two (SVG 1.1 section 7.7).
 //
 // ```novo
 // use svgdoc
@@ -109,17 +97,16 @@ pub enum SvgShape
     // `<line>`.  Stroked only — a line has no interior, so its fill is
     // never drawn however the style is set.
     SvgLineShape(x1: Float, y1: Float, x2: Float, y2: Float)
-    // `<polyline>`: connected segments, not closed.  Its FILL still
-    // applies, which is SVG's most surprising rule and the reason
-    // `svgstyle.stroked` exists.
+    // `<polyline>`: connected segments, not closed.  Its fill still
+    // applies, as if the last point joined the first, which is why
+    // `svgstyle.stroked` sets the fill to none.
     SvgPolylineShape(points: [GeomPointF])
     // `<polygon>`: the same, closed.
     SvgPolygonShape(points: [GeomPointF])
     // `<path>`, as a typed command list.
     SvgPathShape(path: SvgPath)
-    // `<text>`: one run, at one anchor point.  No `tspan`, no
-    // `textPath`, no wrapping — a document that needs a second line
-    // uses a second node, which is what a plot does anyway.
+    // `<text>`: one run, at one anchor point.  There is no `tspan`, no
+    // `textPath` and no wrapping; a second line is a second node.
     SvgTextShape(text: Str, x: Float, y: Float)
 
 // One element of a document.
@@ -133,7 +120,7 @@ pub enum SvgShape
 pub struct SvgNode
     // What it draws.
     shape: SvgShape
-    // How it looks.  ABSOLUTE, not inherited: see `svgstyle`'s header.
+    // How it looks.  Absolute, not inherited: see `svgstyle`.
     style: SvgStyle
     // The element's own transform, applied to it and to its children.
     // `svgdoc.no_transform()` when there is none, so that every node
@@ -167,9 +154,9 @@ pub struct SvgDocument
 
 // A document `width` by `height` user units, with a `viewBox` matching.
 //
-// The constructor for the ordinary case — a drawing whose user units
-// ARE its pixels — so a caller who does not care about resolution
-// independence never meets a viewBox.
+// The constructor for a drawing whose user units are its pixels.  A
+// caller who does not need a separate coordinate system never meets a
+// view box.
 //
 // ```novo
 // use svgdoc
@@ -406,7 +393,7 @@ pub fn path(p: SvgPath, style: SvgStyle) -> SvgNode
 pub fn text(content: Str, at: GeomPointF, style: SvgStyle) -> SvgNode
     node(SvgTextShape(content, at.x, at.y), style, [])
 
-// The same node with a transform on it.
+// The same node with its transform replaced by `t`.
 //
 // ```novo
 // use svgdoc
@@ -448,9 +435,8 @@ pub fn with_style(n: SvgNode, style: SvgStyle) -> SvgNode
 
 // The same node with one more child on the end.
 //
-// A child on a leaf shape is kept and never written, because silently
-// dropping it would make `add_child` a function that sometimes does
-// nothing.  `is_leaf` is the question to ask.
+// A child added to a leaf shape is kept in the tree, and the writer
+// does not write it.  `is_leaf` is the question to ask.
 //
 // ```novo
 // use svgdoc
@@ -551,10 +537,9 @@ pub fn shape_tag(s: SvgShape) -> Str
 // The node whose id is this, anywhere in the subtree, or the subtree's
 // own root when there is none.
 //
-// Not `?SvgNode`: a lookup that answers a node is what a caller wants,
-// and `has_id` is the question that separates "found it" from "did
-// not".  Two calls where a `match` would have been one, in exchange for
-// a return type a caller cannot forget to unwrap.
+// The search is parents before children, and the first match wins.
+// `has_id` is the question that separates a match from the root
+// answered for no match.
 //
 // ```novo
 // use svgdoc
@@ -581,9 +566,8 @@ pub fn has_id(n: SvgNode, id: Str) -> Bool
 
 // Every node of the subtree, parents before children, as one list.
 //
-// The walk a renderer does, written once.  The transform on each node
-// is its OWN, not the accumulated one — `flatten_transforms` is what
-// accumulates.
+// The transform on each node is its own, not the one composed from its
+// ancestors; `flatten_transforms` composes them.
 //
 // ```novo
 // use svgdoc
@@ -600,10 +584,9 @@ pub fn walk(n: SvgNode) -> [SvgNode]
 // The same subtree with every transform composed down from the root and
 // every group's transform cleared.
 //
-// What a renderer with no transform stack wants, and what makes
-// `bounds` a straight walk.  The shapes themselves are NOT transformed
-// — their coordinates stay as written and the node's transform carries
-// the change, so the tree still round-trips.
+// This is the form a renderer with no transform stack wants.  The
+// shapes' coordinates stay as written, and each leaf's transform
+// carries everything above it.
 //
 // ```novo
 // use svgdoc
@@ -617,10 +600,14 @@ pub fn flatten_transforms(n: SvgNode) -> SvgNode
 // The smallest rectangle containing everything the subtree draws, in
 // the coordinate system the subtree's parent uses.
 //
-// TEXT IS ESTIMATED, not measured — see `text_advance_estimate` — so a
-// subtree containing text has approximate bounds and this is the one
-// place this package's answer is not exact.  A caller who needs the
-// real box measures the text with a font package and unions it in.
+// The box is of the geometry, without the stroke's width, and it is
+// tight: a curve's box touches the curve.  A node's own transform is
+// applied, and each outline is transformed before its box is taken.
+//
+// Text is estimated, not measured: its box is `text_advance_estimate`
+// wide, placed by the anchor, and one font size tall with four fifths
+// of it above the baseline.  A caller who needs the real box measures
+// the text with a font package and unions it in.
 //
 // ```novo
 // use svgdoc
@@ -650,17 +637,12 @@ pub fn document_bounds(doc: SvgDocument) -> GeomRectF
 // How wide a text run is likely to be, from its length and its font
 // size alone.
 //
-// AN ESTIMATE, AND IT SAYS SO IN ITS NAME.  Measuring text needs glyph
-// advances, which need a font file, which needs a filesystem — and this
-// package is `core`.  The number here is the length times the size
-// times a constant close to the average advance of a proportional Latin
-// face, which is right to within a fifth for ordinary text and wrong
-// for anything else.
-//
-// It exists because `bounds` has to return something for a text node,
-// and a silent zero would make a plot's auto-sized viewBox clip its own
-// axis labels.  A caller that needs the real width measures it and
-// unions it in.
+// Measuring text needs glyph advances from a font file, which this
+// package does not read.  The estimate is the count of code points
+// times the size times 0.55, near the average advance of a proportional
+// Latin face.  It is right to within a fifth for ordinary text and wrong
+// for anything else.  `bounds` uses it, so that a view box sized from a
+// document's bounds does not clip its labels.
 //
 // ```novo
 // use svgdoc
@@ -674,11 +656,11 @@ pub fn text_advance_estimate(content: Str, font_size: Float) -> Float
 // The whole subtree as one path, with every shape converted and every
 // transform applied.
 //
-// For a consumer with one primitive: a rasteriser, a plotter, a CNC
-// toolpath.  Text is DROPPED rather than converted, because turning a
-// string into outlines needs the font file this package does not have —
-// and dropping it visibly is better than emitting an empty path that
-// looks like a bug in the caller.
+// This is the form a consumer with one primitive wants: a rasteriser, a
+// plotter, a toolpath.  Each shape becomes its outline (a circle and an
+// ellipse four arcs, a rectangle four lines or four lines and four
+// arcs), one subpath each.  Text is left out, because its outline needs
+// a font file.
 //
 // ```novo
 // use svgdoc

@@ -5,6 +5,42 @@ All notable changes to svg-nv are recorded here. The format is
 package follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 with the pre-1.0 rule that a breaking change bumps the MINOR number.
 
+## 0.1.0 — 2026-09-27
+
+The first implementation of the interface published as 0.0.1: the
+style, the path arithmetic, the document tree, the writer and the
+reader.
+
+### Added
+
+- `svgpath` computes tight boxes (curve turning points and arc extremes
+  from SVG 1.1 appendix F.6), flattens within a tolerance, converts arcs
+  to cubics, and transforms arcs exactly, reversing the sweep under a
+  mirror.  `to_string_compact` writes each command in its shortest
+  spelling, relative to where a reader's pen will be.
+- `svgwrite` leaves out every attribute a reader would get anyway: an
+  inherited one where it equals the parent's, any other where it equals
+  SVG's initial value.  A colour's alpha is written as `fill-opacity` or
+  `stroke-opacity` with at least three decimals.
+- `svgread` reads XML 1.0 elements, attributes, the five predefined
+  entities, character references, CDATA sections, comments and
+  processing instructions, and skips a document type declaration.  It
+  resolves inheritance, reads the `style` attribute's declarations after
+  the attributes, resolves `currentColor`, `inherit`, percentages, `em`
+  and `ex`, and folds the opacities into the paints.
+- `tools/pathref.py`, an independent reader of path data, and the
+  suites described in the README.
+
+### Changed
+
+- The dependencies are geometry-nv `^0.1.0` and color-nv `^0.1.1`, and
+  the toolchain floor is 0.13.0.
+- `svgwrite.to_string` and `node_to_string` refuse a value that is not
+  finite with `SvgBadNumber`, whose offset is into the text that would
+  have been written.
+- `svgdoc.with_transform` replaces the node's transform; the interface
+  did not say whether it replaced or composed.
+
 ## 0.0.2 — 2026-09-15
 
 - README rewritten to the package README style guide (docs/writing-a-readme.md); no change to the interface.

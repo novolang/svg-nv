@@ -1,20 +1,20 @@
 [package]
 name        = "svg-nv"
-version     = "0.0.2"
+version     = "0.1.0"
 description = "SVG as a value: a document tree of shapes with their presentation attributes, paths as a typed command list rather than a string, a writer that never holds the whole document, and a reader for the subset a program round-trips."
 license     = "Apache-2.0"
 
-# An INTERFACE release: every `pub fn` body is a `todo()`, so the
-# signatures and the effect rows are published and nothing is
-# implemented.  `novo pkg publish` recognises the shape and requires
-# both the draft stability and the 0.0.x version; the first
-# implementation is the 0.1.0 published over it.
-stability   = "draft"
+# `experimental` because no program outside this repository has used the
+# package yet, and the tests were written against the signatures rather
+# than by a consumer.
+stability   = "experimental"
 
-# `core`.  A document is a value, the writer hands back text a chunk at
-# a time, and the reader takes the text the caller already holds.
-# Nothing here opens a file — `image-io-nv` is the shelf that does, and
-# for a text format the caller almost always has the string anyway.
+# `core`: a document is a value, the writer hands back text a chunk at
+# a time, and the reader takes text the caller already holds.  No
+# function declares an effect.
+#
+# There is no `tests/embedded_probe.nv`: a document tree is an
+# allocation from end to end, which is not what a microcontroller has.
 layer       = "core"
 
 category    = "graphics"

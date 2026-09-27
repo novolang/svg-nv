@@ -1,20 +1,18 @@
-// svgfault.nv — what reading an SVG can go wrong on.
+// svgfault.nv — what reading an SVG document can go wrong on.
 //
-// EVERY VARIANT CARRIES A BYTE OFFSET into the input, because an error
-// in a 400-kilobyte document that does not say where is an error nobody
-// can act on.  The offset is into the ORIGINAL string the caller
-// handed over, so `str.slice` around it shows the reader what the
-// parser was looking at.
+// Every variant carries a byte offset into the string the caller handed
+// over, so slicing around it shows what the reader was looking at.
 //
-// WHAT IS NOT A FAULT is as much of the design as what is.  An element
-// this package does not model, an attribute it does not read, a CSS
-// block, a filter — none of them stops the parse.  They are SKIPPED,
-// and `svgread.parse_report` counts them, because a reader that refused
-// every document with a `<style>` block in it would refuse most SVGs in
-// the world.  A fault here means the input is not well-formed XML, or a
-// number where a number has to be is not one.
+// A fault means the input is not well-formed XML, or a number where a
+// number has to be is not one.  An element or an attribute this package
+// does not model is skipped rather than refused, and
+// `svgread.parse_report` counts it.
 //
-// NO EFFECTS.
+// The writer reports one fault of its own: `SvgBadNumber` for a value
+// that is not finite, which SVG has no spelling for.  Its offset is into
+// the text the writer would have produced.
+//
+// No function here has an effect.
 
 // What reading an SVG can go wrong on.
 //
@@ -35,7 +33,8 @@ pub enum SvgFault
     SvgMismatchedTag(offset: Int, opened: Str, closed: Str)
     // An attribute that is not `name="value"`.
     SvgMalformedAttribute(offset: Int, element: Str)
-    // An attribute whose value has to be a number and is not.
+    // An attribute whose value has to be a number and is not.  The
+    // writer reports a value that is not finite with this variant too.
     SvgBadNumber(offset: Int, attribute: Str, found: Str)
     // A `d` attribute that is not a path: an unknown command letter, a
     // command with the wrong number of arguments, an arc flag that is
@@ -52,10 +51,8 @@ pub enum SvgFault
     // predefined entities and numeric character references are read;
     // a document that declares its own in a DOCTYPE is not.
     SvgUnknownEntity(offset: Int, name: Str)
-    // The tree nested deeper than the reader's fixed limit.  A bound
-    // rather than a stack overflow: a `core` package with no allocator
-    // failure path would otherwise recurse until the process died on a
-    // document built to make it.
+    // The tree nests deeper than the reader's limit.  The limit keeps
+    // a document built to nest without end from exhausting the stack.
     SvgTooDeep(offset: Int, limit: Int)
 
 // The rule every `SvgFault` is printed by: say what was expected, quote

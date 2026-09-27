@@ -1,35 +1,26 @@
-// svgpath.nv — a path as a typed command list, never as a string.
+// svgpath.nv — a path as a typed command list.
 //
-// THE `d` ATTRIBUTE IS A LANGUAGE, and treating it as one is the whole
-// point of this module.  `"M 0 0 L 10 0 l 0 10 z"` is a program: two
-// coordinate modes, five shorthand commands that borrow a control point
-// from the command before them, a number syntax that permits
-// `1.5.5` as two numbers, and an arc flag pair that may be written
-// without separators.  A package that stored that string would hand
-// every consumer the job of parsing it, and every consumer would do it
-// slightly differently.
+// A `d` attribute is a small language (SVG 1.1 section 8.3): absolute
+// and relative coordinates, shorthand commands that borrow a control
+// point from the command before them, a number syntax in which `1.5.5`
+// is two numbers, and arc flags that may be written without separators.
+// Here a path is a list of commands instead, and every command is
+// absolute and in its long form.  The reader turns relative into
+// absolute, `H` and `V` into `SvgLineTo`, and `S` and `T` into
+// `SvgCubicTo` and `SvgQuadTo` with the reflected control point
+// computed.  A program never has to track a current point to understand
+// a command.
 //
-// SO A PATH IS A LIST OF COMMANDS, AND THEY ARE ALL ABSOLUTE.  The
-// reader normalises on the way in — relative to absolute, `H`/`V` to
-// `SvgLineTo`, `S`/`T` to their long forms with the reflected control
-// point computed — so a program never meets a shorthand and never has
-// to track a current point to understand a command.  That is usvg's
-// decision and the reason usvg exists.
+// A path written out in long form is longer than one written with the
+// shorthands.  `to_string_compact` writes the shortest spelling of each
+// command; the tree itself is never shorthand.
 //
-// WHAT THAT COSTS is size: a written-out path is longer than the one
-// that came in, because the shorthands exist to make it shorter.
-// `svgwrite` takes the size back by re-introducing relative commands
-// and the obvious shorthands when asked; nothing in the TREE is ever
-// shorthand.
+// An elliptical arc stays an arc.  An arc is exactly representable and a
+// cubic approximation of it is not, so converting on the way in would
+// change the geometry of every rounded rectangle that passed through.
+// `to_cubics` is the conversion for a renderer with no arc primitive.
 //
-// THE ARC SURVIVES, converted by nobody.  Most vector pipelines expand
-// SVG's elliptical arc into cubics on the way in, and a caller who wants
-// that has `to_cubics`.  It is not the default because an arc is
-// exactly representable and a cubic approximation is not: a round trip
-// through this package would silently change the geometry of every
-// rounded rectangle in a document.
-//
-// NO EFFECTS.
+// No function here has an effect.
 
 use geompoint
 use geomrect
@@ -61,16 +52,13 @@ pub enum SvgPathCmd
     // x-axis at `rotation` radians, and the two flags that pick which
     // of the four arcs between the endpoints is meant.
     //
-    // RADIANS, not the degrees the attribute is written in.  Every
-    // other angle in the drawing stack is radians, and a single
-    // attribute in degrees is a conversion somebody forgets; the reader
-    // and the writer do it at the text boundary, which is the only
-    // place it belongs.
+    // The rotation is in radians.  The attribute writes degrees, and
+    // the reader and the writer convert.
     SvgArcTo(rx: Float, ry: Float, rotation: Float, large_arc: Bool, sweep: Bool, x: Float,
              y: Float)
     // Close the current subpath with a straight line back to its
-    // starting point.  NOT the same as a `SvgLineTo` to that point: a
-    // closed subpath joins its ends with the style's line JOIN, and an
+    // starting point.  This differs from a `SvgLineTo` to that point: a
+    // closed subpath joins its ends with the style's line join, and an
     // open one caps them.
     SvgClosePath
 
@@ -333,8 +321,8 @@ pub fn is_well_formed(p: SvgPath) -> Bool
         Some(SvgMoveTo(_, _)) => true
         _                     => false
 
-// Where the pen is after the last command, or the ORIGIN for an empty
-// path.
+// Where the pen is after the last command, or the origin for an empty
+// path.  After a `SvgClosePath` the pen is at the subpath's start.
 //
 // ```novo
 // use svgpath
@@ -351,12 +339,10 @@ pub fn current_point(p: SvgPath) -> GeomPointF
 // The smallest rectangle containing every point the path passes
 // through.
 //
-// TIGHT, not the control-polygon box: a Bezier lies inside the hull of
-// its control points and usually well inside it, and a plot that sized
-// its viewBox from the loose box would leave a visible margin on one
-// side of every curve.  The cost is solving each segment's derivative
-// for its extrema, which is arithmetic and belongs here rather than in
-// every caller.
+// The box is tight, not the box of the control points: each curve's
+// turning points are solved for, and an arc's box is taken from its
+// ellipse.  A move draws nothing, so a path that only moves has an
+// empty box.
 //
 // ```novo
 // use svgpath
@@ -376,13 +362,10 @@ pub fn bounds(p: SvgPath) -> GeomRectF
 // One run of the pen: the points between a `SvgMoveTo` and whatever
 // ended it.
 //
-// A NAMED TYPE RATHER THAN A LIST OF LISTS, for two reasons.  A
-// `[[GeomPointF]]` is refused outright — only the flat-buffer `[T]` has
-// an inline element layout, so a list of lists of an unboxed struct has
-// nowhere to put the elements (SPEC §14.6).  And it would lose
-// something real: `closed` is the difference between joining the two
-// ends of a run and capping them, which changes what a rasteriser
-// draws.
+// A run is a named type rather than a list of points, because
+// `closed` is part of it: a closed run's ends are joined and an open
+// run's are capped.  A list of lists of an unboxed struct is also not a
+// type the language has (SPEC section 14.6).
 //
 // ```novo
 // use svgpath
@@ -391,20 +374,23 @@ pub fn bounds(p: SvgPath) -> GeomRectF
 //     println("${svgpath.subpath_count(svgpath.empty())}")
 // ```
 pub struct SvgSubpath
-    // The points, in order, already subdivided.  The closing point of a
-    // closed run is NOT repeated at the end — `closed` says it is
-    // there.
+    // The points, in order, already subdivided.  A closed run does not
+    // repeat its first point at the end; `closed` says it joins.
     points: [GeomPointF]
     // Whether the run ended with a `SvgClosePath`.
     closed: Bool
 
 // The path's points at `tolerance`, as straight segments.
 //
-// Every curve and arc subdivided until it is within `tolerance` of the
-// line through it, so a rasteriser, a hit test or a length measurement
-// has only segments to deal with.  One `SvgSubpath` per run of the pen,
-// because a single polyline joining two subpaths would draw a line that
-// is not in the path.
+// Every curve and arc is cut into straight pieces that stray no more
+// than `tolerance` from it, so a rasteriser, a hit test or a length
+// measurement has only segments to deal with.  A tolerance of zero or
+// less asks for the most pieces, 4096 a curve.
+//
+// Each run of the pen is its own `SvgSubpath`.  A move followed by
+// another move makes no run, and commands before the first move draw
+// nothing, which is SVG's rule.  A command after a `SvgClosePath` starts
+// a new run at the closed subpath's start.
 //
 // ```novo
 // use svgpath
@@ -453,11 +439,13 @@ pub fn flatten(p: SvgPath, tolerance: Float) -> [SvgSubpath]
 
 // The same path with every arc replaced by cubics.
 //
-// For a consumer whose renderer has no arc primitive — which is most of
-// them.  NOT done on the way in, because an arc is exactly
-// representable and its cubic approximation is not: doing it by default
-// would silently change the geometry of every rounded rectangle that
-// passed through this package.
+// For a renderer with no arc primitive.  Each arc becomes one cubic per
+// quarter turn or part of one, whose distance from the ellipse is below
+// 0.03% of its radius.  An arc with a zero radius becomes a line, and
+// one that ends where it starts is dropped (SVG 1.1 appendix F.6.2).
+// The reader does not do this on the way in, because the approximation
+// would change the geometry of every rounded rectangle that passed
+// through.
 //
 // ```novo
 // use svgpath
@@ -556,9 +544,13 @@ pub fn to_string(p: SvgPath, decimals: Int) -> Str
 // The path as a `d` attribute, choosing whichever of the absolute,
 // relative and shorthand spellings is shortest per command.
 //
-// The same geometry as `to_string` and typically a third fewer bytes,
-// which is what makes an SVG of a scatter plot with ten thousand points
-// worth sending. The tree is never shorthand; only this output is.
+// Each command is written absolute or relative, and as `H`, `V`, `S` or
+// `T` where that reads back to the same point, whichever is shortest.
+// A letter the previous command already puts in force is left out, as
+// are the leading zero of a fraction and a separator a sign or a second
+// point makes unneeded.  A relative coordinate is taken from where a
+// reader's pen will be, so rounding does not accumulate.  The tree is
+// never shorthand; only this text is.
 //
 // ```novo
 // use svgpath

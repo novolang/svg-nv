@@ -9,11 +9,6 @@ style and its own transform. Its points and transforms are
 the registry are built on it: [font-nv](https://novo-lang.org/packages/font-nv)
 and [raster-nv](https://novo-lang.org/packages/raster-nv).
 
-**Status: NOT IMPLEMENTED — interface only.** Every function is declared with
-its full signature, but every body is a `todo()` that panics when called. The
-package is published so its design can be reviewed and depended on before it
-is implemented. Version 0.1.0 will be the first working release.
-
 ## What it is
 
 An SVG document is a **viewport**, which is how large the image is, and a
@@ -105,10 +100,6 @@ fn main() [io]
         Err(f)   => println("${svgfault.offset_of(f)}")
 ```
 
-Build and test with `novo pkg build` and `novo test`. Today `novo test` fails
-on purpose: every test reaches a `not implemented: svg-nv.<module>.<fn>` panic.
-The tests are the specification the implementation will have to satisfy.
-
 ## What the package contains
 
 | Module | Contents |
@@ -126,9 +117,10 @@ The tests are the specification the implementation will have to satisfy.
 producing a chart of a few kilobytes wants.
 
 **`svgwrite.writer` and `next_chunk` write a document the caller never holds
-as text.** Each chunk is one complete element: an opening tag through a
-closing tag for a leaf, and an opening tag alone for a group. A scatter plot
-with a million points never exists as a string.
+as text.** Each chunk is one element: an opening tag through a closing tag for
+a leaf, and an opening tag alone for a group. A chunk that finishes a group
+also carries the group's closing tag. A scatter plot with a million points
+never exists as a string.
 
 **`svgread.parse` reads a document.** `parse_report` reads the same document
 and counts what it skipped, which is how a caller tells "read it all" from
@@ -197,9 +189,11 @@ none of that, keeps two decimals and compacts paths.
     and a silent zero would make an automatically sized view box clip its own
     labels. A caller who needs the real width measures it with a font package
     and unions it in.
-12. **An attribute whose value is SVG's own default is omitted on the way
-    out.** An attribute a renderer needs to get the geometry right is always
-    written, default or not. Those two rules together are why a document
+12. **An attribute is omitted on the way out when a reader would get the same
+    value without it.** An inherited presentation attribute is written where
+    it differs from the parent's value, and any other attribute where it
+    differs from SVG's initial value. A size a shape needs, such as a
+    rectangle's `width` or a circle's `r`, is always written. A document
     written by this package and read back gives the same tree.
 13. **Numbers decide the output size, so `decimals` is on the write style.**
     Three decimal places on a view box a thousand units wide is a thousandth of
@@ -225,6 +219,19 @@ none of that, keeps two decimals and compacts paths.
 18. **The fill rule is geometry-nv's `GeomFillRule`, not a type of this
     package's own.** There is one fill rule in the registry rather than two
     that have to agree.
+19. **A colour's alpha travels as `fill-opacity` or `stroke-opacity`.** SVG
+    1.1 has no colour with an alpha. The writer writes the colour as
+    `#rrggbb` and its alpha as the opacity, with at least three decimals so
+    the alpha byte reads back unchanged. The reader multiplies the opacity
+    into the colour's alpha.
+20. **A `style` attribute outranks the presentation attributes beside it.**
+    The reader applies an element's attributes first and its `style`
+    declarations after them (SVG 1.1 section 6.4). A class selector or a
+    `<style>` block is CSS and is not read.
+21. **A value that is not finite has no SVG spelling.** `svgwrite.to_string`
+    refuses a document holding one with `SvgBadNumber`. The streaming writer
+    cannot refuse, and writes `NaN`, `inf` or `-inf`, which no reader
+    accepts.
 
 ## What is not included
 
@@ -234,6 +241,11 @@ none of that, keeps two decimals and compacts paths.
   needs a package with one in it.
 - **CSS and animation.** A `<style>` block is skipped and counted.
 - **`use`, `image`, `symbol` and `switch`.** Same.
+- **A nested `svg` element, an `a` element and `tspan` positioning.** A
+  nested viewport and a link are skipped with their contents. The text of a
+  `tspan` is kept in its run, and its own position and style are not.
+- **`display`, `visibility` and the other presentation attributes not in
+  the table above.** They are skipped and counted.
 - **Text measurement.** Resolving a font family to glyph advances needs a font
   file, which needs a filesystem, which this package does not have. See rule
   11.
@@ -263,65 +275,28 @@ none of that, keeps two decimals and compacts paths.
 ## Tests
 
 ```bash
-novo test tests/svg_tests.nv    # the document, the style, the path and the round trip
+bash tests/coverage.sh    # every suite, and the line coverage of src/
 ```
 
-The reference implementations are [usvg](https://github.com/RazrFalcon/resvg)
-for the reader's contract and
-[svgwrite](https://github.com/mozman/svgwrite) for the writer's shape. Both
-are permissively licensed, and usvg's own test corpus is the oracle.
-
-The suite states usvg's contract as assertions: that a parsed document carries
-absolute styles, that paths come out absolute and free of shorthand, and that
-a shape is still a shape. Each case fixes a small document and an exact
-answer. Every test declares the effects `[io]` and nothing else, which is the
-claim: a writer that had needed to write anywhere, or a reader that had needed
-to open anything, would have declared a file effect here.
-
-The tests compile today and fail at run, each on the
-`not implemented: svg-nv.<module>.<fn>` panic that is its body. That is the
-expected state of an interface release. They turn green one at a time as
-bodies land. `novo test --isolate tests/svg_tests.nv` prints one verdict per
-test.
-
-## Implementation status
-
-| Item | Implemented |
+| Suite | What it asserts |
 | --- | --- |
-| `svgdoc.SvgDocument`, `.SvgNode`, `.SvgShape`, `.SvgTransform`, `.SvgViewBox` | the types are declared; nothing constructs one |
-| `svgdoc.document`, `.document_with`, `.add`, `.child_count_of`, `.document_bounds` | no |
-| `svgdoc.view_box`, `.view_box_rect`, `.view_box_of`, `.no_transform`, `.to_xform`, `.of_xform` | no |
-| `svgdoc.group`, `.rect`, `.rounded_rect`, `.circle`, `.ellipse`, `.line` | no |
-| `svgdoc.polyline`, `.polygon`, `.path`, `.text` | no |
-| `svgdoc.with_transform`, `.with_id`, `.with_style`, `.add_child` | no |
-| `svgdoc.child_count`, `.node_count`, `.is_leaf`, `.shape_tag`, `.walk` | no |
-| `svgdoc.find_by_id`, `.has_id`, `.flatten_transforms`, `.bounds` | no |
-| `svgdoc.text_advance_estimate`, `.to_path` | no |
-| `svgstyle.SvgStyle`, `.SvgPaint`, `.SvgLineCap`, `.SvgLineJoin`, `.SvgTextAnchor` | the types are declared; nothing constructs one |
-| `svgstyle.SvgUnitKind`, `.SvgLength`, `.SvgFontSpec` | the types are declared; nothing constructs one |
-| `svgstyle.plain`, `.filled`, `.stroked` | no |
-| `svgstyle.with_fill`, `.with_stroke`, `.with_dash`, `.with_opacity`, `.with_font`, `.with_anchor` | no |
-| `svgstyle.default_font`, `.font`, `.user`, `.px`, `.percent`, `.to_user_units` | no |
-| `svgstyle.unit_suffix`, `.length_to_string`, `.paint_to_string`, `.paint_opacity` | no |
-| `svgstyle.cap_to_string`, `.join_to_string`, `.anchor_to_string`, `.fill_rule_to_string` | no |
-| `svgstyle.is_visible` | no |
-| `svgpath.SvgPathCmd`, `.SvgPath`, `.SvgSubpath` | the types are declared; nothing constructs one |
-| `svgpath.empty`, `.of_commands`, `.push`, `.move_to`, `.line_to` | no |
-| `svgpath.cubic_to`, `.quad_to`, `.arc_to`, `.close` | no |
-| `svgpath.of_rect`, `.of_ellipse`, `.of_points` | no |
-| `svgpath.command_count`, `.commands_of`, `.subpath_count`, `.is_well_formed` | no |
-| `svgpath.current_point`, `.bounds`, `.length` | no |
-| `svgpath.flatten`, `.to_cubics`, `.quads_to_cubics`, `.transform` | no |
-| `svgpath.to_string`, `.to_string_compact` | no |
-| `svgwrite.SvgWriteStyle`, `.SvgWriter` | the types are declared; nothing constructs one |
-| `svgwrite.pretty`, `.minimal`, `.to_string`, `.node_to_string` | no |
-| `svgwrite.writer`, `.next_chunk`, `.is_done`, `.progress`, `.byte_length` | no |
-| `svgwrite.number`, `.escape`, `.transform_attr` | no |
-| `svgread.SvgReadReport` | the type is declared; nothing constructs one |
-| `svgread.parse`, `.parse_report`, `.parse_within`, `.looks_like_svg` | no |
-| `svgread.parse_path`, `.parse_transform`, `.parse_length`, `.parse_view_box` | no |
-| `svgread.parse_paint`, `.parse_dash_array` | no |
-| `svgfault.SvgFault`, `.offset_of` | the type is declared; `offset_of` is not implemented |
+| `svg_tests.nv` | The API: the style, the path, the document, a write and a read |
+| `write_tests.nv` | The writer's output byte for byte, in both styles, and the streaming writer's chunks joining to the same text |
+| `pathdata_tests.nv` | 43 `d` attributes, each read as the independent Python reader `tools/pathref.py` reads it, or refused at the same byte |
+| `roundtrip_tests.nv` | Hand-written documents, one as a drawing program exports it: what the reader makes of them, and a write and a read giving the same text again |
+| `reader_tests.nv` | Every refusal at its exact offset, and every attribute the reader takes |
+| `geometry_tests.nv` | Arc boxes worked out by hand; tight boxes against flattened ones; paths through rotation, scale, mirror and shear against their points mapped one by one |
+| `format_tests.nv` | The number spelling, the style keywords and the fault messages |
+
+The writer's goldens were checked to be well-formed XML with Python's
+`xml.etree`. `python3 tools/pathref.py > tests/pathdata_tests.nv` writes the
+path data suite again from its cases.
+
+The reference implementations are [usvg](https://github.com/RazrFalcon/resvg)
+for the reader's contract and [svgwrite](https://github.com/mozman/svgwrite)
+for the writer's shape. Both are permissively licensed. Every test declares
+the effects `[io]` and nothing else, and no function in the package declares
+any effect.
 
 ## Licence
 

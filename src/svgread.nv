@@ -1,45 +1,35 @@
-// svgread.nv — text into a document, for the subset a program
-// round-trips.
+// svgread.nv — text into a document.
 //
-// WHAT THIS READER IS FOR.  Not "read any SVG" — that is a renderer's
-// job and needs CSS, a font database and a paint-server resolver.  This
-// reads the subset `svgwrite` writes plus the subset a drawing program
-// exports, and it answers one question honestly: **what does this
-// document draw, as shapes with absolute styles?**  usvg is the
-// reference, and this is its contract at a smaller scale.
+// This reader answers one question about an SVG document: what does it
+// draw, as shapes with absolute styles?  It reads the subset `svgwrite`
+// writes and the subset a drawing program exports.  usvg is the
+// reference for that contract; this is the same contract at a smaller
+// scale, without CSS, fonts or paint servers.
 //
-// THREE THINGS HAPPEN ON THE WAY IN, and they are the reason a parsed
-// document is easier to use than the text it came from:
+// Three things happen on the way in.
 //
-//   - **Inheritance is resolved.**  Every node comes out carrying the
-//     style it actually renders with.  Nothing in the tree needs a walk
-//     to the root to be understood.
-//   - **Paths are normalised.**  Relative becomes absolute, `H`/`V`/
-//     `S`/`T` become their long forms, and the current point is gone by
-//     the time a caller sees anything.  See `svgpath`'s header.
-//   - **Shapes stay shapes.**  A `<rect>` comes back as a
-//     `SvgRectShape` and not as a path.  usvg converts everything to
-//     paths because a renderer wants one primitive; this package keeps
-//     the distinction because a ROUND TRIP is the point, and
-//     `svgdoc.to_path` is there for a caller who wants usvg's answer.
+// - Inheritance is resolved.  Every node carries the style it renders
+//   with, and `fill-opacity` and `stroke-opacity` are folded into the
+//   paint's alpha.
+// - Paths are normalised to absolute commands in their long forms, as
+//   `svgpath` describes.
+// - Shapes stay shapes.  A `<rect>` comes back as an `SvgRectShape`, so
+//   a document read and written back keeps its elements.
+//   `svgdoc.to_path` converts everything to one path for a caller who
+//   wants that.
 //
-// WHAT IS SKIPPED RATHER THAN REFUSED: every element and attribute this
-// package does not model — gradients, patterns, filters, masks, clip
-// paths, markers, `use`, `image`, CSS blocks, animation, metadata,
-// namespaced attributes from an editor.  `parse_report` counts them and
-// names the first few, so a caller can tell the difference between
-// "read it all" and "read the half of it that was shapes".  A reader
-// that refused a document with a `<style>` block in it would refuse
-// most SVG files in the world.
+// Every element and attribute this package does not model is skipped
+// rather than refused: gradients, patterns, filters, masks, clip paths,
+// markers, `use`, `image`, CSS, animation, metadata and the namespaced
+// elements and attributes an editor adds.  `parse_report` counts them
+// and names the first eight.
 //
-// A `url(#id)` PAINT IS PRESERVED as `SvgPaintRef`, so a document that
-// uses a gradient comes back with its reference intact even though the
-// gradient itself was skipped.  Writing it out again produces a
-// document that names a paint server that is no longer in it — which is
-// the honest outcome, and `SvgReadReport.skipped_elements` is how a
-// caller knows to expect it.
+// A `url(#id)` paint is kept as `SvgPaintRef` although the paint server
+// it names was skipped, so writing the document out again names a paint
+// server that is no longer in it.  `SvgReadReport.has_dangling_paint`
+// says when that has happened.
 //
-// NO EFFECTS.  The text is the caller's; this module reads it.
+// No function here has an effect.  The text is the caller's.
 
 use svgdoc
 use svgpath
@@ -64,20 +54,25 @@ pub struct SvgReadReport
     // The document that was read.
     document: SvgDocument
     // How many elements were skipped because this package does not
-    // model them.
+    // model them.  An element skipped with everything inside it counts
+    // once.
     skipped_elements: Int
-    // How many attributes were skipped on elements that WERE read.
+    // How many attributes and style declarations were skipped on
+    // elements that were read, a value the attribute does not take
+    // included.  Namespace declarations are not counted.
     skipped_attributes: Int
-    // The first few skipped element names, in document order, for a
-    // message a caller can show.  Bounded — a document with ten
-    // thousand skipped elements does not produce ten thousand strings.
+    // The first eight skipped element names, in document order, for a
+    // message a caller can show.
     skipped_names: [Str]
-    // Whether any `url(#id)` paint survived a paint server that did
-    // not.  The one case where the document that comes back out is not
-    // a valid rendering of the one that went in.
+    // Whether any `url(#id)` paint was kept although the paint server
+    // it names was skipped.  Writing such a document out names a paint
+    // server that is not in it.
     has_dangling_paint: Bool
 
 // A document from SVG text.
+//
+// The document is the first `svg` element in document order, and its
+// nesting limit is 256.
 //
 // ```novo
 // use svgread
@@ -109,10 +104,11 @@ pub fn parse_report(text: Str) -> Result<SvgReadReport, SvgFault>
 
 // The same, with a nesting limit of the caller's choosing.
 //
-// `parse` uses a fixed limit; this is for a caller reading a document
-// from somewhere it does not trust and wanting a tighter one.  A
-// document deeper than the limit is `SvgTooDeep`, not a stack overflow:
-// a `core` package has no allocator failure path to catch one with.
+// `parse` uses a limit of 256.  This is for a caller reading a document
+// from somewhere it does not trust.  The limit counts every open
+// element, the root included, so a limit of 2 admits the root and its
+// children.  A document deeper than the limit is refused with
+// `SvgTooDeep`.
 //
 // ```novo
 // use svgread
@@ -129,10 +125,11 @@ pub fn parse_within(text: Str, max_depth: Int) -> Result<SvgDocument, SvgFault>
 
 // A path from a `d` attribute's text.
 //
-// Public on its own because a `d` attribute is the single most useful
-// thing to lift out of an SVG — a font's glyph outline, an icon set, a
-// map's boundaries — and a caller doing that should not have to build a
-// document around it.
+// A `d` attribute is the thing most often lifted out of an SVG on its
+// own: a glyph outline, an icon, a map's boundaries.  The grammar is SVG
+// 1.1 section 8.3.9, and the result is normalised as `svgpath`
+// describes.  The first command has to be a move; empty text is an empty
+// path.
 //
 // ```novo
 // use svgread
@@ -148,11 +145,10 @@ pub fn parse_path(d: Str) -> Result<SvgPath, SvgFault>
 
 // A transform from a `transform` attribute's text.
 //
-// SVG's six functions — `matrix`, `translate`, `scale`, `rotate`,
-// `skewX`, `skewY` — composed left to right into one transform, which
-// is what the attribute means.  Angles in the TEXT are degrees, SVG's
-// unit; the `SvgTransform` that comes back is the composed matrix, so
-// the question does not arise again.
+// SVG's six functions, `matrix`, `translate`, `scale`, `rotate`,
+// `skewX` and `skewY`, composed into one matrix: the function written
+// first is applied last (SVG 1.1 section 7.6).  Angles in the text are
+// degrees.  Empty text is the identity.
 //
 // ```novo
 // use svgread
@@ -166,6 +162,9 @@ pub fn parse_transform(s: Str) -> Result<SvgTransform, SvgFault>
     transform_from(s, 0)
 
 // A length from an attribute's text: a number and an optional unit.
+//
+// The units are `px`, `%`, `pt`, `mm`, `cm` and `in`.  `em` and `ex` need
+// a font size and are refused here; the document reader resolves them.
 //
 // ```novo
 // use svgread
@@ -196,6 +195,8 @@ pub fn parse_view_box(s: Str) -> Result<SvgViewBox, SvgFault>
 // `"none"`, a colour in any of color-nv's spellings, or `url(#id)`.
 // Every colour form goes through `colortext.parse`, so this package and
 // every other consumer of color-nv agree on what `rebeccapurple` means.
+// A fallback after a `url(#id)` is ignored.  `currentColor` is black
+// here, since only a document has a `color` to name.
 //
 // ```novo
 // use svgread
@@ -214,9 +215,9 @@ pub fn parse_paint(s: Str) -> Result<SvgPaint, SvgFault>
 // A dash pattern from a `stroke-dasharray` attribute's text.
 //
 // `"none"` gives an empty list.  A pattern with an odd number of
-// entries is returned AS WRITTEN rather than doubled — the doubling is
-// SVG's rendering rule and belongs to whatever renders it, not to the
-// value this reader produces.
+// entries is returned as written; doubling it is the renderer's rule.
+// A percentage or an `em` has no viewport or font here and counts as
+// zero.
 //
 // ```novo
 // use svgread
@@ -232,11 +233,10 @@ pub fn parse_dash_array(s: Str) -> Result<[Float], SvgFault>
     dash_into(out, s, 0, 0.0, 0.0)!
     Ok(out)
 
-// Whether the text looks like an SVG document at all: an `<svg>`
-// element somewhere near the start.
+// Whether the text looks like an SVG document: its first element, after
+// any declaration, comments and document type, is `svg`.
 //
-// A cheap test for a caller sniffing a file it has not parsed yet, and
-// the one `image-io-nv` would use to pick a decoder.
+// A cheap test for a caller sniffing a file it has not parsed yet.
 //
 // ```novo
 // use svgread

@@ -190,6 +190,12 @@ fn test_the_compact_spelling_reads_back_as_the_same_path() [io]
     test.assert(svgpath.to_string_compact(path("M1 1C1 1 2 2 3 1Q3 1 4 4"), 2)
                 == "M1 1S2 2 3 1T4 4")
 
+    test.case("after a relative move the letter in force is a relative line")
+    let moves = path("M100 100L90 90M101 101L103 104")
+    let short = svgpath.to_string_compact(moves, 0)
+    test.assert(short == "M100 100 90 90m11 11 2 3")
+    test.assert(svgpath.to_string(path(short), 0) == svgpath.to_string(moves, 0))
+
     test.case("a fraction after a fraction needs no separator, a whole number does")
     test.assert(svgpath.to_string_compact(path("M0.5 0.25L1 .5"), 2) == "M.5.25 1 .5")
 

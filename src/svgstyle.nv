@@ -1,32 +1,22 @@
-// svgstyle.nv — the presentation attributes every SVG element carries,
-// as one value.
+// svgstyle.nv — the presentation attributes of an SVG element, as one
+// value.
 //
-// ONE STYLE FOR EVERY ELEMENT, not a different attribute set per shape.
-// SVG's presentation attributes are defined on the whole shape group:
-// `fill` applies to a circle, a path and a text run alike, and `stroke`
-// to a line and a rectangle alike.  A style per shape kind would be
-// five near-identical structs and a writer with five branches that do
-// the same thing.  So `SvgStyle` is one struct and `svgdoc.SvgNode`
-// carries exactly one of it.
+// SVG defines its presentation attributes for every shape alike: `fill`
+// applies to a circle, a path and a text run, and `stroke` to a line and
+// a rectangle.  So there is one `SvgStyle`, and every `svgdoc.SvgNode`
+// carries exactly one.
 //
-// A STYLE IS ABSOLUTE, NOT INHERITED.  SVG inherits presentation
-// attributes down the tree, and a reader that preserved that would hand
-// the caller a document in which no element knows how it looks without
-// a walk to the root.  This package's reader RESOLVES inheritance on
-// the way in — usvg's decision, and the reason usvg exists — so every
-// node in a parsed document carries the style it actually renders with.
-// The writer does not re-factor common attributes back onto the group
-// on the way out; that would be a size optimisation that changes what
-// the tree means.
+// A style here is absolute.  SVG inherits presentation attributes down
+// the tree (SVG 1.1 section 6.1).  The reader resolves that inheritance
+// on the way in, so every node of a parsed document carries the style it
+// renders with, and the writer leaves out what a reader would inherit.
 //
-// WHAT IS NOT HERE, and it is the honest list: gradients, patterns,
-// masks, clip paths, filters, markers and CSS.  A `url(#id)` paint is
-// PRESERVED as `SvgPaintRef` so a document that uses one round-trips
-// with its reference intact, and nothing in this package resolves it.
-// plot-nv needs none of them, and a renderer that does needs a
-// different package with a paint server in it.
+// Gradients, patterns, masks, clip paths, filters, markers and CSS are
+// not modelled.  A `url(#id)` paint is kept as `SvgPaintRef`, so a
+// document that uses one keeps its reference, and nothing in this
+// package resolves it.
 //
-// NO EFFECTS.
+// No function here has an effect.
 
 use srgb
 use colortext
@@ -148,12 +138,9 @@ pub struct SvgLength
 
 // What a text run is set in.
 //
-// A NAME AND A SIZE, and no font file anywhere.  Resolving a family
-// name to an outline needs a font database, which needs a filesystem,
-// which would put this package in `host`.  SVG itself defers the same
-// way: the document names a family and the renderer finds it.  The
-// consequence a caller has to know is that this package cannot measure
-// text — see `svgdoc.text_advance_estimate`.
+// A family name and a size, and no font file.  SVG defers the same
+// way: the document names a family and the renderer finds it.  So this
+// package cannot measure text; see `svgdoc.text_advance_estimate`.
 //
 // ```novo
 // use svgstyle
@@ -167,12 +154,10 @@ pub struct SvgFontSpec
     // The `font-size`, in user units.
     size: Float
     // The `font-weight` as a number: 400 is normal, 700 is bold.  The
-    // keywords `normal` and `bold` are read as those two numbers, so a
-    // caller compares one thing.
+    // reader turns the keywords into these numbers.
     weight: Int
-    // Whether `font-style` is `italic`.  SVG's third value, `oblique`,
-    // is read as italic — the distinction needs a font file to mean
-    // anything, and this package has none.
+    // Whether `font-style` is `italic`.  The reader reads SVG's third
+    // value, `oblique`, as italic.
     italic: Bool
 
 // Everything about how one element looks.
@@ -199,9 +184,8 @@ pub struct SvgStyle
     // multiple of the stroke width.  SVG's default is 4.
     miter_limit: Float
     // The dash pattern: on, off, on, off, in user units.  Empty means a
-    // solid stroke.  An ODD-LENGTH pattern repeats to make an even one,
-    // which is SVG's rule and is worth knowing before a caller wonders
-    // why a three-element dash looks like six.
+    // solid stroke.  A renderer repeats a pattern of odd length to make
+    // an even one (SVG 1.1 section 11.4), so three entries draw as six.
     stroke_dash: [Float]
     // How far into the dash pattern the stroke starts.
     stroke_dash_offset: Float
@@ -259,9 +243,8 @@ pub fn filled(color: Srgba8) -> SvgStyle
 
 // A style that strokes with one colour and fills nothing.
 //
-// The one a plot's line series wants, and the one callers get wrong:
-// SVG's default fill is BLACK, so a polyline given only a stroke comes
-// out as a filled blob.
+// This is the style for a line series.  SVG's default fill is black, so
+// a polyline given only a stroke would also be filled.
 //
 // ```novo
 // use svgstyle
@@ -509,7 +492,8 @@ pub fn unit_suffix(u: SvgUnitKind) -> Str
         SvgUnitCm      => "cm"
         SvgUnitIn      => "in"
 
-// A length as SVG writes it: the number and its suffix.
+// A length as SVG writes it: the number, to at most six decimals, and
+// its suffix.
 //
 // ```novo
 // use svgstyle
@@ -522,9 +506,9 @@ pub fn length_to_string(l: SvgLength) -> Str
 
 // A paint as SVG writes it: `"none"`, `"#rrggbb"` or `"url(#id)"`.
 //
-// A colour whose coverage is not full writes as `#rrggbb` here and
-// carries its alpha in a separate `fill-opacity`, which is what SVG 1.1
-// requires and what every renderer reads.
+// A colour is written as `#rrggbb` whatever its coverage.  SVG 1.1 has
+// no colour with an alpha, so the writer carries it in `fill-opacity` or
+// `stroke-opacity`, and `paint_opacity` is that value.
 //
 // ```novo
 // use svgstyle
@@ -539,6 +523,9 @@ pub fn paint_to_string(p: SvgPaint) -> Str
         SvgPaintRef(id)  => "url(#" + id + ")"
 
 // A paint's coverage as SVG's separate opacity attribute, `0.0 ..= 1.0`.
+//
+// A colour's is its alpha over 255, a reference's is 1, and no paint's
+// is 0.
 //
 // ```novo
 // use svgstyle
