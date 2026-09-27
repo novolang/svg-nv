@@ -1,0 +1,280 @@
+// reader_tests.nv — what the reader refuses, where, and what it makes
+// of every attribute it reads.
+//
+// Each refusal is stated with its exact byte offset and its message,
+// because an offset is the one thing a caller acts on.  The XML cases
+// follow XML 1.0 sections 2.4 to 2.8 and 4.1; the attribute cases
+// follow SVG 1.1 chapters 6, 7 and 11.
+
+use std.test
+use std.list
+use srgb
+use svgstyle
+use svgpath
+use svgdoc
+use svgread
+use svgfault
+
+// The message of the fault a text is refused with, or "accepted".
+fn refusal(text: Str) -> Str
+    match svgread.parse(text)
+        Ok(_)  => "accepted"
+        Err(f) => f.message()
+
+fn report(text: Str) -> SvgReadReport
+    match svgread.parse_report(text)
+        Ok(r)  => r
+        Err(_) => SvgReadReport { document: svgdoc.document(0.0, 0.0, []), skipped_elements: 0 - 1,
+                                  skipped_attributes: 0 - 1, skipped_names: [],
+                                  has_dangling_paint: false }
+
+// The style of the first element of a one-element document.
+fn style_of(element: Str) -> SvgStyle
+    let r = report("<svg width=\"100\" height=\"100\">" + element + "</svg>")
+    if svgdoc.child_count_of(r.document) == 0
+        return svgstyle.with_opacity(svgstyle.plain(), 0.0 - 1.0)
+    r.document.children[0].style
+
+// The style of child `j` of top-level element `i`.
+fn nested_style(doc: SvgDocument, i: Int, j: Int) -> SvgStyle
+    let outer = doc.children[i]
+    let inner = outer.children[j]
+    inner.style
+
+fn skipped_attributes(element: Str) -> Int
+    report("<svg width=\"100\" height=\"100\">" + element + "</svg>").skipped_attributes
+
+@test
+fn test_a_document_that_ends_early_is_truncated_at_its_end() [io]
+    test.case("an element never closed")
+    test.assert(refusal("<svg width=\"1\" height=\"1\">") == "the document ends inside an element, at byte 26")
+    test.case("inside an attribute value, a tag, a name and before a value")
+    test.assert(refusal("<svg width=\"1") == "the document ends inside an element, at byte 13")
+    test.assert(refusal("<svg ") == "the document ends inside an element, at byte 5")
+    test.assert(refusal("<svg width") == "the document ends inside an element, at byte 10")
+    test.assert(refusal("<svg width=") == "the document ends inside an element, at byte 11")
+    test.case("inside a comment, a CDATA section, an instruction and a closing tag")
+    test.assert(refusal("<svg><!-- x") == "the document ends inside an element, at byte 11")
+    test.assert(refusal("<svg><![CDATA[x") == "the document ends inside an element, at byte 15")
+    test.assert(refusal("<svg><?pi") == "the document ends inside an element, at byte 9")
+    test.assert(refusal("<svg></svg") == "the document ends inside an element, at byte 10")
+    test.case("and in the prolog before any element")
+    test.assert(refusal("<?xml version") == "the document ends inside an element, at byte 13")
+    test.assert(refusal("<!-- a") == "the document ends inside an element, at byte 6")
+    test.assert(refusal("<!DOCTYPE svg [ <!ENTITY a \"]>\">") == "the document ends inside an element, at byte 32")
+
+@test
+fn test_markup_that_is_not_xml_is_refused_where_it_stands() [io]
+    test.case("a tag that does not start with a name")
+    test.assert(refusal("<svg>< g/></svg>") == "'<' at byte 5 does not begin a tag")
+    test.assert(refusal("<svg/ >") == "'/' at byte 4 does not begin a tag")
+    test.assert(refusal("<svg><!ELEMENT x></svg>") == "'<!ELEMENT' at byte 5 does not begin a tag")
+    test.assert(refusal("<svg></svg x>") == "'</svg' at byte 5 does not begin a tag")
+    test.case("a closing tag for another element")
+    test.assert(refusal("<svg><g></rect></svg>") == "<g> is closed by </rect> at byte 8")
+    test.case("attributes that are not name=\"value\"")
+    test.assert(refusal("<svg width=1>") == "an attribute of <svg> at byte 5 is not name=\"value\"")
+    test.assert(refusal("<svg ==\"1\">") == "an attribute of <svg> at byte 5 is not name=\"value\"")
+    test.assert(refusal("<svg a=\"1\"b=\"2\"/>") == "an attribute of <svg> at byte 10 is not name=\"value\"")
+    test.assert(refusal("<svg a=\"1\" a=\"2\"/>") == "an attribute of <svg> at byte 11 is not name=\"value\"")
+    test.assert(refusal("<svg a=\"<\"/>") == "an attribute of <svg> at byte 5 is not name=\"value\"")
+    test.case("an input with no svg element in it")
+    test.assert(refusal("<html/>") == "no <svg> element, looking from byte 0")
+    test.assert(refusal("") == "no <svg> element, looking from byte 0")
+    test.assert(refusal("just text") == "no <svg> element, looking from byte 0")
+
+@test
+fn test_references_are_the_five_entities_and_character_references() [io]
+    test.case("an entity only a DTD could define")
+    test.assert(refusal("<svg>&nbsp;</svg>") == "&nbsp; at byte 5 is not an entity this reader defines")
+    test.assert(refusal("<svg id=\"a&b\"/>") == "&b; at byte 10 is not an entity this reader defines")
+    test.case("character references outside Unicode's scalar values, or with bad digits")
+    for bad in ["&#xZZ;", "&#0;", "&#999999999;", "&#55296;", "&#x;", "& x"]
+        test.assert(str.contains(refusal("<svg>" + bad + "</svg>"), "is not an entity this reader defines"))
+    test.case("and the ones that are defined")
+    match svgread.parse("<svg><text>&lt;&gt;&amp;&quot;&apos;&#65;&#x4a;&#x4A;&#x6b;</text></svg>")
+        Ok(d)  =>
+            match d.children[0].shape
+                SvgTextShape(s, _, _) => test.assert(s == "<>&\"'AJJk")
+                _                     => test.assert(false)
+        Err(_) => test.assert(false)
+
+@test
+fn test_numbers_transforms_and_view_boxes_are_refused_where_they_stand() [io]
+    test.case("a length that is not a number, or has a unit SVG does not define")
+    test.assert(refusal("<svg width=\"wide\"/>") == "width=\"wide\" at byte 12 is not a number")
+    test.assert(refusal("<svg width=\"5furlongs\"/>") == "width=\"5furlongs\" at byte 13 is not a number")
+    test.assert(refusal("<svg><circle r=\"x\"/></svg>") == "r=\"x\" at byte 16 is not a number")
+    test.assert(refusal("<svg><circle r=\"1q\"/></svg>") == "r=\"1q\" at byte 17 is not a number")
+    test.assert(refusal("<svg><g stroke-width=\"abc\"/></svg>") == "stroke-width=\"abc\" at byte 22 is not a number")
+    test.assert(refusal("<svg><g opacity=\"0.5x\"/></svg>") == "opacity=\"0.5x\" at byte 17 is not a number")
+    test.assert(refusal("<svg><polygon points=\"0,0 a\"/></svg>") == "points=\"0,0 a\" at byte 26 is not a number")
+    test.assert(refusal("<svg><g stroke-dasharray=\"4 x\"/></svg>") == "stroke-dasharray=\"x\" at byte 28 is not a number")
+    test.case("path data")
+    test.assert(refusal("<svg><path d=\"M 0 0 XY 5\"/></svg>") == "'XY' at byte 20 is not a path command")
+    test.case("transforms")
+    test.assert(refusal("<svg><g transform=\"rotate(1 2)\"/></svg>") == "'rotate' at byte 19 is not a transform function")
+    test.assert(refusal("<svg><g transform=\"foo(1)\"/></svg>") == "'foo' at byte 19 is not a transform function")
+    test.assert(refusal("<svg><g transform=\"translate 5\"/></svg>") == "'translate' at byte 19 is not a transform function")
+    test.assert(refusal("<svg><g transform=\"scale(1\"/></svg>") == "'scale' at byte 19 is not a transform function")
+    test.assert(refusal("<svg><g transform=\"scale(a)\"/></svg>") == "'scale' at byte 25 is not a transform function")
+    test.assert(refusal("<svg><g transform=\" (1)\"/></svg>") == "'(1)' at byte 20 is not a transform function")
+    test.case("view boxes")
+    test.assert(refusal("<svg viewBox=\"0 0 10\"/>") == "viewBox=\"0 0 10\" at byte 14 is not four numbers")
+    test.assert(refusal("<svg viewBox=\"0 0 a 1\"/>") == "viewBox=\"0 0 a 1\" at byte 18 is not four numbers")
+    test.case("and nesting deeper than the limit")
+    test.assert(refusal("<svg><g><g/></g></svg>") == "accepted")
+    match svgread.parse_within("<svg><g><g/></g></svg>", 2)
+        Ok(_)  => test.assert(false)
+        Err(f) => test.assert(f.message() == "the tree nests deeper than 2 at byte 8")
+
+@test
+fn test_the_prolog_and_what_surrounds_the_root() [io]
+    test.case("a byte order mark, a declaration, a comment and a document type")
+    test.assert(refusal("\u{feff}<?xml version=\"1.0\"?><!-- c --><!DOCTYPE svg [<!ENTITY a \"]\">]><svg/>") == "accepted")
+    test.case("an svg element anywhere, the first in document order")
+    match svgread.parse("junk <html><body><p/><svg width=\"7\"/></body><svg width=\"8\"/></html>")
+        Ok(d)  => test.assert(d.width.value == 7.0)
+        Err(_) => test.assert(false)
+    test.case("comments and instructions inside the tree")
+    test.assert(refusal("<svg><!-- c --><?pi x?><g/></svg>") == "accepted")
+    test.case("the root's size defaults to the whole viewport, and a percentage gives no view box")
+    match svgread.parse("<svg/>")
+        Ok(d)  =>
+            test.assert(svgstyle.length_to_string(d.width) == "100%")
+            test.assert(d.view_box.width == 0.0)
+        Err(_) => test.assert(false)
+    match svgread.parse("<svg width=\"10\" height=\"50%\"/>")
+        Ok(d)  => test.assert(d.view_box.height == 0.0)
+        Err(_) => test.assert(false)
+
+@test
+fn test_sniffing_a_file() [io]
+    test.case("an svg element after the prolog")
+    test.assert(svgread.looks_like_svg("<?xml version=\"1.0\"?>\n<!-- x -->\n<!DOCTYPE svg>\n<svg xmlns=\"x\">"))
+    test.assert(svgread.looks_like_svg("<svg>"))
+    test.case("anything else")
+    test.assert(svgread.looks_like_svg("<svgx>") == false)
+    test.assert(svgread.looks_like_svg("<?xml") == false)
+    test.assert(svgread.looks_like_svg("") == false)
+
+@test
+fn test_every_presentation_attribute_reads() [io]
+    test.case("the stroke's numbers")
+    let s = style_of("<g stroke-opacity=\"0.25\" stroke=\"red\" stroke-miterlimit=\"8\" stroke-dashoffset=\"2\" opacity=\"2\"/>")
+    match s.stroke
+        SvgPaintColor(c) => test.assert(c.a == 64)
+        _                => test.assert(false)
+    test.assert(s.miter_limit == 8.0 and s.stroke_dash_offset == 2.0 and s.opacity == 1.0)
+
+    test.case("each keyword of each keyword attribute")
+    test.assert(svgstyle.cap_to_string(style_of("<g stroke-linecap=\"butt\"/>").stroke_cap) == "butt")
+    test.assert(svgstyle.cap_to_string(style_of("<g stroke-linecap=\"square\"/>").stroke_cap) == "square")
+    test.assert(svgstyle.join_to_string(style_of("<g stroke-linejoin=\"miter\"/>").stroke_join) == "miter")
+    test.assert(svgstyle.join_to_string(style_of("<g stroke-linejoin=\"round\"/>").stroke_join) == "round")
+    test.assert(svgstyle.join_to_string(style_of("<g stroke-linejoin=\"bevel\"/>").stroke_join) == "bevel")
+    test.assert(svgstyle.fill_rule_to_string(style_of("<g fill-rule=\"nonzero\"/>").fill_rule) == "nonzero")
+    test.assert(svgstyle.fill_rule_to_string(style_of("<g fill-rule=\"evenodd\"/>").fill_rule) == "evenodd")
+    test.assert(svgstyle.anchor_to_string(style_of("<g text-anchor=\"start\"/>").text_anchor) == "start")
+    test.assert(svgstyle.anchor_to_string(style_of("<g text-anchor=\"middle\"/>").text_anchor) == "middle")
+    test.assert(svgstyle.anchor_to_string(style_of("<g text-anchor=\"end\"/>").text_anchor) == "end")
+    test.assert(style_of("<g font-style=\"normal\"/>").font.italic == false)
+    test.assert(style_of("<g font-style=\"italic\"/>").font.italic)
+    test.assert(style_of("<g font-style=\"oblique\"/>").font.italic)
+
+    test.case("font weights, as numbers, keywords and relative to the parent")
+    test.assert(style_of("<g font-weight=\"normal\"/>").font.weight == 400)
+    test.assert(style_of("<g font-weight=\"300\"/>").font.weight == 300)
+    test.assert(style_of("<g font-weight=\"bolder\"/>").font.weight == 700)
+    test.assert(style_of("<g font-weight=\"lighter\"/>").font.weight == 100)
+    let nested = report("<svg><g font-weight=\"100\"><g font-weight=\"bolder\"/></g>"
+                        + "<g font-weight=\"600\"><g font-weight=\"bolder\"/><g font-weight=\"lighter\"/></g>"
+                        + "<g font-weight=\"900\"><g font-weight=\"lighter\"/></g></svg>").document
+    test.assert(nested_style(nested, 0, 0).font.weight == 400)
+    test.assert(nested_style(nested, 1, 0).font.weight == 900)
+    test.assert(nested_style(nested, 1, 1).font.weight == 400)
+    test.assert(nested_style(nested, 2, 0).font.weight == 700)
+
+    test.case("a value the attribute does not take leaves it as it was and is counted")
+    for bad in ["stroke-linecap=\"x\"", "stroke-linejoin=\"arcs\"", "fill-rule=\"x\"",
+                "text-anchor=\"x\"", "font-style=\"x\"", "font-weight=\"heavy\"",
+                "font-weight=\"1200\"", "fill=\"bogus\"", "fill=\"url(#)\"", "stroke=\"url(#a\"",
+                "color=\"none\"", "color=\"bogus\"", "style=\"foo:bar\"", "class=\"a\""]
+        test.assert(skipped_attributes("<g " + bad + "/>") == 1)
+    test.assert(skipped_attributes("<g style=\"fill:red;;junk;stroke:blue\"/>") == 0)
+
+    test.case("inherit keeps the parent's value, for a keyword too")
+    let inh = report("<svg><g stroke-linecap=\"round\"><g stroke-linecap=\"inherit\"/></g></svg>")
+    test.assert(inh.skipped_attributes == 0)
+    test.assert(svgstyle.cap_to_string(nested_style(inh.document, 0, 0).stroke_cap) == "round")
+
+@test
+fn test_every_shape_reads_with_its_defaults() [io]
+    let d = report("<svg width=\"100\" height=\"100\"><rect/><polygon points=\"0,0 1,0 0,1\"/>"
+                   + "<path/><text>t</text><polyline/><rect rx=\"3\"><animate/></rect>"
+                   + "<text x=\"5,6\" y=\" 7 8\">u</text></svg>")
+    let kids = d.document.children
+    test.case("a missing geometry attribute is zero")
+    match kids[0].shape
+        SvgRectShape(x, y, w, h, rx, ry) => test.assert(x == 0.0 and w == 0.0 and rx == 0.0 and ry == 0.0)
+        _                                => test.assert(false)
+    test.case("a polygon, and a path with no data")
+    test.assert(svgdoc.shape_tag(kids[1].shape) == "polygon")
+    match kids[2].shape
+        SvgPathShape(p) => test.assert(svgpath.command_count(p) == 0)
+        _               => test.assert(false)
+    test.case("text with no position, and a polyline with no points")
+    match kids[3].shape
+        SvgTextShape(s, x, y) => test.assert(s == "t" and x == 0.0 and y == 0.0)
+        _                     => test.assert(false)
+    match kids[4].shape
+        SvgPolylineShape(ps) => test.assert(ps.len() == 0)
+        _                    => test.assert(false)
+    test.case("a radius alone is both radii, and an element inside a shape is skipped")
+    match kids[5].shape
+        SvgRectShape(_, _, _, _, rx, ry) => test.assert(rx == 3.0 and ry == 3.0)
+        _                                => test.assert(false)
+    test.assert(d.skipped_elements == 1 and d.skipped_names == ["animate"])
+    test.case("a text position list starts at its first entry")
+    match kids[6].shape
+        SvgTextShape(_, x, y) => test.assert(x == 5.0 and y == 7.0)
+        _                     => test.assert(false)
+
+@test
+fn test_the_attribute_parsers_on_their_own() [io]
+    test.case("lengths")
+    match svgread.parse_length("12pt")
+        Ok(l)  => test.assert(svgstyle.to_user_units(l, 0.0) == 16.0)
+        Err(_) => test.assert(false)
+    match svgread.parse_length("")
+        Ok(_)  => test.assert(false)
+        Err(f) => test.assert(svgfault.offset_of(f) == 0)
+    match svgread.parse_length("  5 furlongs")
+        Ok(_)  => test.assert(false)
+        Err(f) => test.assert(svgfault.offset_of(f) == 3)
+    test.case("dash arrays and paints")
+    match svgread.parse_dash_array("4 x")
+        Ok(_)  => test.assert(false)
+        Err(f) => test.assert(svgfault.offset_of(f) == 2)
+    match svgread.parse_paint(" bogus")
+        Ok(_)  => test.assert(false)
+        Err(f) => test.assert(f.message() == "paint=\" bogus\" at byte 1 is not a number")
+    match svgread.parse_paint("url('#a')")
+        Ok(p)  => test.assert(svgstyle.paint_to_string(p) == "url(#a)")
+        Err(_) => test.assert(false)
+    match svgread.parse_paint("currentColor")
+        Ok(p)  => test.assert(svgstyle.paint_to_string(p) == "#000000")
+        Err(_) => test.assert(false)
+    test.case("every transform function")
+    let ts = ["matrix(1 2 3 4 5 6)", "translate(5)", "scale(2)", "rotate(90 10 0)", "skewX(45)",
+              "skewY(45)", ""]
+    var got: [SvgTransform] = []
+    for s in ts
+        match svgread.parse_transform(s)
+            Ok(t)  => list.push(got, t)
+            Err(_) => test.assert(false)
+    test.assert(got[0].d == 4.0 and got[1].e == 5.0 and got[1].f == 0.0)
+    test.assert(got[2].d == 2.0)
+    test.assert(math.abs(got[3].e - 10.0) < 0.000001 and math.abs(got[3].f + 10.0) < 0.000001)
+    test.assert(math.abs(got[4].c - 1.0) < 0.000001 and math.abs(got[5].b - 1.0) < 0.000001)
+    test.assert(got[6].a == 1.0 and got[6].e == 0.0)

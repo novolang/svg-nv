@@ -1,0 +1,248 @@
+// write_tests.nv — the writer's output, byte for byte.
+//
+// Each case builds a document or a node and states the exact text the
+// writer produces for it.  The goldens were checked by hand against
+// SVG 1.1 and parsed with Python's xml.etree to confirm they are
+// well-formed XML.  What they pin down: the attribute order, the
+// omission of every attribute a reader would get anyway, the number
+// spelling, the escaping, the two write styles, and that the streaming
+// writer's chunks join to the same text as `to_string`.
+
+use std.test
+use std.list
+use geompoint
+use geomrect
+use geomxform
+use srgb
+use svgstyle
+use svgpath
+use svgdoc
+use svgwrite
+use svgfault
+
+fn chart() -> SvgDocument
+    let blue = svgstyle.filled(srgb.opaque(srgb.rgb8(60, 110, 200)))
+    let bar = svgdoc.rect(geomrect.of_xywh(0.0, 100.0, 30.0, 100.0), blue)
+    let middle = svgstyle.with_anchor(svgstyle.plain(), SvgAnchorMiddle)
+    let label = svgdoc.text("42 & up", geompoint.ptf(0.0, 96.0), middle)
+    let red = srgb.with_alpha(srgb.rgb8(255, 0, 0), 128)
+    let pts = [geompoint.ptf(0.0, 0.0), geompoint.ptf(10.5, 20.25), geompoint.ptf(30.0, 5.0)]
+    let series = svgdoc.polyline(pts, svgstyle.stroked(red, 1.5))
+    let g = svgdoc.with_id(svgdoc.with_transform(svgdoc.group([bar, label, series]),
+                                                 geomxform.translation(10.0, 0.0)),
+                           "plot")
+    let p0 = svgpath.line_to(svgpath.move_to(svgpath.empty(), 10.0, 10.0), 20.0, 10.0)
+    let p1 = svgpath.cubic_to(p0, 20.0, 15.0, 25.0, 20.0, 30.0, 20.0)
+    let p = svgpath.close(svgpath.quad_to(p1, 35.0, 25.0, 40.0, 20.0))
+    let dashed = svgstyle.with_dash(svgstyle.stroked(srgb.opaque(srgb.black()), 2.0), [4.0, 2.0],
+                                    1.0)
+    svgdoc.document(640.0, 200.0, [g, svgdoc.path(p, dashed), svgdoc.group([])])
+
+fn written(doc: SvgDocument, style: SvgWriteStyle) -> Str
+    match svgwrite.to_string(doc, style)
+        Ok(s)  => s
+        Err(_) => "refused"
+
+fn node_text(n: SvgNode, style: SvgWriteStyle) -> Str
+    match svgwrite.node_to_string(n, style)
+        Ok(s)  => s
+        Err(_) => "refused"
+
+// Every chunk of the streaming writer, joined.
+fn streamed(doc: SvgDocument, style: SvgWriteStyle) -> Str
+    var w = svgwrite.writer(doc, style)
+    var out = ""
+    while not svgwrite.is_done(w)
+        let (next, chunk) = svgwrite.next_chunk(w)
+        out = out + chunk
+        w = next
+    out
+
+@test
+fn test_the_pretty_style_golden() [io]
+    test.case("indented by two, one element a line, three decimals, absolute paths")
+    let expected = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"640\" height=\"200\" viewBox=\"0 0 640 200\">\n"
+        + "  <g id=\"plot\" transform=\"matrix(1 0 0 1 10 0)\">\n"
+        + "    <rect y=\"100\" width=\"30\" height=\"100\" fill=\"#3c6ec8\"/>\n"
+        + "    <text y=\"96\" text-anchor=\"middle\">42 &amp; up</text>\n"
+        + "    <polyline points=\"0,0 10.5,20.25 30,5\" fill=\"none\" stroke=\"#ff0000\" stroke-opacity=\"0.502\" stroke-width=\"1.5\"/>\n"
+        + "  </g>\n"
+        + "  <path d=\"M10 10L20 10C20 15 25 20 30 20Q35 25 40 20Z\" fill=\"none\" stroke=\"#000000\" stroke-width=\"2\" stroke-dasharray=\"4,2\" stroke-dashoffset=\"1\"/>\n"
+        + "  <g/>\n"
+        + "</svg>\n"
+    test.assert(written(chart(), svgwrite.pretty()) == expected)
+
+    test.case("and the streaming writer's chunks join to the same text")
+    test.assert(streamed(chart(), svgwrite.pretty()) == expected)
+    test.assert(svgwrite.byte_length(chart(), svgwrite.pretty()) == str.len(expected))
+
+@test
+fn test_the_minimal_style_golden() [io]
+    test.case("one line, two decimals, and the path in its shortest spelling")
+    let expected = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"640\" height=\"200\" viewBox=\"0 0 640 200\">"
+        + "<g id=\"plot\" transform=\"matrix(1 0 0 1 10 0)\">"
+        + "<rect y=\"100\" width=\"30\" height=\"100\" fill=\"#3c6ec8\"/>"
+        + "<text y=\"96\" text-anchor=\"middle\">42 &amp; up</text>"
+        + "<polyline points=\"0,0 10.5,20.25 30,5\" fill=\"none\" stroke=\"#ff0000\" stroke-opacity=\"0.502\" stroke-width=\"1.5\"/>"
+        + "</g>"
+        + "<path d=\"M10 10H20c0 5 5 10 10 10q5 5 10 0Z\" fill=\"none\" stroke=\"#000000\" stroke-width=\"2\" stroke-dasharray=\"4,2\" stroke-dashoffset=\"1\"/>"
+        + "<g/>"
+        + "</svg>"
+    test.assert(written(chart(), svgwrite.minimal()) == expected)
+    test.assert(streamed(chart(), svgwrite.minimal()) == expected)
+
+@test
+fn test_the_streaming_writer_hands_out_one_element_a_chunk() [io]
+    test.case("the first chunk is the root's opening tag")
+    let w0 = svgwrite.writer(chart(), svgwrite.pretty())
+    test.assert(w0.total == 7)
+    let (w1, c1) = svgwrite.next_chunk(w0)
+    test.assert(str.starts_with(c1, "<svg ") and str.ends_with(c1, ">\n"))
+    test.assert(svgwrite.progress(w1) > 0.14 and svgwrite.progress(w1) < 0.15)
+
+    test.case("a group with children is its opening tag alone")
+    let (w2, c2) = svgwrite.next_chunk(w1)
+    test.assert(c2 == "  <g id=\"plot\" transform=\"matrix(1 0 0 1 10 0)\">\n")
+
+    test.case("the last child of a group carries the group's closing tag")
+    let (w3, _) = svgwrite.next_chunk(w2)
+    let (w4, _) = svgwrite.next_chunk(w3)
+    let (w5, c5) = svgwrite.next_chunk(w4)
+    test.assert(str.ends_with(c5, "/>\n  </g>\n"))
+
+    test.case("and the last chunk carries the root's")
+    let (w6, _) = svgwrite.next_chunk(w5)
+    let (w7, c7) = svgwrite.next_chunk(w6)
+    test.assert(c7 == "  <g/>\n</svg>\n")
+    test.assert(svgwrite.is_done(w7))
+    test.assert(svgwrite.progress(w7) == 1.0)
+
+    test.case("a writer that is done stays done and hands out nothing")
+    let (w8, c8) = svgwrite.next_chunk(w7)
+    test.assert(c8 == "")
+    test.assert(w8.emitted == w7.emitted)
+
+@test
+fn test_an_empty_document_and_the_xml_declaration() [io]
+    test.case("a document with no children is one empty root element")
+    let d = svgdoc.document(10.0, 20.0, [])
+    test.assert(written(d, svgwrite.minimal())
+                == "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"20\" viewBox=\"0 0 10 20\"/>")
+
+    test.case("the declaration comes first when the style asks for it")
+    let decl = SvgWriteStyle { indent: 1, decimals: 1, newlines: true, xml_declaration: true,
+                               compact_paths: false }
+    let expected = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        + "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"20\" viewBox=\"0 0 10 20\"/>\n"
+    test.assert(written(d, decl) == expected)
+    test.assert(streamed(d, decl) == expected)
+    test.assert(svgwrite.writer(d, decl).total == 1)
+
+    test.case("a viewport with units, and a view box of no size is not written")
+    let mm = svgdoc.document_with(SvgLength { value: 210.0, unit: SvgUnitMm },
+                                  SvgLength { value: 29.7, unit: SvgUnitCm },
+                                  svgdoc.view_box(0.0, 0.0, 0.0, 0.0), [])
+    test.assert(written(mm, svgwrite.minimal())
+                == "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"210mm\" height=\"29.7cm\"/>")
+
+    test.case("indenting without newlines writes one line")
+    let flat = SvgWriteStyle { indent: 4, decimals: 3, newlines: false, xml_declaration: false,
+                               compact_paths: false }
+    let one = svgdoc.document(1.0, 1.0, [svgdoc.group([svgdoc.group([])])])
+    test.assert(written(one, flat)
+                == "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\" viewBox=\"0 0 1 1\"><g><g/></g></svg>")
+
+@test
+fn test_each_shape_as_the_writer_spells_it() [io]
+    let st = svgstyle.plain()
+    let m = svgwrite.minimal()
+    test.case("a circle and an ellipse leave out a zero centre")
+    test.assert(node_text(svgdoc.circle(geompoint.origin(), 5.0, st), m) == "<circle r=\"5\"/>")
+    test.assert(node_text(svgdoc.ellipse(geompoint.ptf(1.0, 2.0), 3.0, 4.0, st), m)
+                == "<ellipse cx=\"1\" cy=\"2\" rx=\"3\" ry=\"4\"/>")
+
+    test.case("a line leaves out each zero coordinate")
+    test.assert(node_text(svgdoc.line(geompoint.ptf(0.0, 1.0), geompoint.ptf(2.0, 0.0), st), m)
+                == "<line y1=\"1\" x2=\"2\"/>")
+
+    test.case("equal corner radii are written once, and unequal ones twice")
+    let r = geomrect.of_xywh(1.0, 2.0, 3.0, 4.0)
+    test.assert(node_text(svgdoc.rounded_rect(r, 1.0, 1.0, st), m)
+                == "<rect x=\"1\" y=\"2\" width=\"3\" height=\"4\" rx=\"1\"/>")
+    test.assert(node_text(svgdoc.rounded_rect(r, 1.0, 0.5, st), m)
+                == "<rect x=\"1\" y=\"2\" width=\"3\" height=\"4\" rx=\"1\" ry=\"0.5\"/>")
+    test.assert(node_text(svgdoc.rounded_rect(r, 0.0, 0.5, st), m)
+                == "<rect x=\"1\" y=\"2\" width=\"3\" height=\"4\" rx=\"0\" ry=\"0.5\"/>")
+
+    test.case("a polygon's points are pairs")
+    let tri = [geompoint.ptf(0.0, 0.0), geompoint.ptf(1.0, 0.0), geompoint.ptf(0.0, 1.0)]
+    test.assert(node_text(svgdoc.polygon(tri, st), m) == "<polygon points=\"0,0 1,0 0,1\"/>")
+
+    test.case("text carries the font attributes that differ from SVG's")
+    let f = svgstyle.with_font(st, svgstyle.font("Helvetica \"Neue\"", 12.0, 700, true))
+    test.assert(node_text(svgdoc.text("<hi>", geompoint.ptf(1.0, 2.0), f), m)
+                == "<text x=\"1\" y=\"2\" font-family=\"Helvetica &quot;Neue&quot;\" font-size=\"12\" font-weight=\"700\" font-style=\"italic\">&lt;hi&gt;</text>")
+
+    test.case("the rest of the stroke and the fill rule, the opacity and a paint reference")
+    let s1 = svgstyle.with_stroke(svgstyle.with_fill(st, SvgPaintRef("grad")),
+                                  SvgPaintColor(srgb.opaque(srgb.white())), 3.0)
+    let s2 = SvgStyle { fill: s1.fill, stroke: s1.stroke, stroke_width: 3.0,
+                        stroke_cap: SvgCapRound, stroke_join: SvgJoinBevel, miter_limit: 10.0,
+                        stroke_dash: [], stroke_dash_offset: 0.0, opacity: 0.25,
+                        fill_rule: GeomEvenOdd, font: s1.font, text_anchor: SvgAnchorEnd }
+    test.assert(node_text(svgdoc.with_style(svgdoc.group([]), s2), m)
+                == "<g fill=\"url(#grad)\" fill-rule=\"evenodd\" stroke=\"#ffffff\" stroke-width=\"3\" stroke-linecap=\"round\" stroke-linejoin=\"bevel\" stroke-miterlimit=\"10\" text-anchor=\"end\" opacity=\"0.25\"/>")
+
+@test
+fn test_an_attribute_is_written_only_where_a_reader_would_not_inherit_it() [io]
+    test.case("a child with SVG's default fill under a red group says so")
+    let red = svgstyle.filled(srgb.opaque(srgb.rgb8(255, 0, 0)))
+    let child = svgdoc.rect(geomrect.of_xywh(0.0, 0.0, 1.0, 1.0), svgstyle.plain())
+    let g = svgdoc.with_style(svgdoc.group([child]), red)
+    test.assert(node_text(g, svgwrite.minimal())
+                == "<g fill=\"#ff0000\"><rect width=\"1\" height=\"1\" fill=\"#000000\"/></g>")
+
+    test.case("a child with the group's own style writes nothing")
+    let same = svgdoc.rect(geomrect.of_xywh(0.0, 0.0, 1.0, 1.0), red)
+    test.assert(node_text(svgdoc.with_style(svgdoc.group([same]), red), svgwrite.minimal())
+                == "<g fill=\"#ff0000\"><rect width=\"1\" height=\"1\"/></g>")
+
+    test.case("an opacity inherited from a translucent parent is written back to 1")
+    let half = svgstyle.filled(srgb.with_alpha(srgb.rgb8(0, 0, 255), 51))
+    let blue = svgstyle.filled(srgb.opaque(srgb.rgb8(0, 0, 255)))
+    let kid = svgdoc.circle(geompoint.origin(), 1.0, blue)
+    test.assert(node_text(svgdoc.with_style(svgdoc.group([kid]), half), svgwrite.minimal())
+                == "<g fill=\"#0000ff\" fill-opacity=\"0.2\"><circle r=\"1\" fill-opacity=\"1\"/></g>")
+
+    test.case("opacity does not inherit, so a child under a faded group writes none")
+    let faded = svgstyle.with_opacity(svgstyle.plain(), 0.5)
+    test.assert(node_text(svgdoc.with_style(svgdoc.group([kid]), faded), svgwrite.pretty())
+                == "<g opacity=\"0.5\">\n  <circle r=\"1\" fill=\"#0000ff\"/>\n</g>\n")
+
+@test
+fn test_a_value_with_no_svg_spelling_is_refused_where_it_stands() [io]
+    test.case("a coordinate that is not a number")
+    let bad = svgdoc.circle(geompoint.ptf(math.nan(), 0.0), 1.0, svgstyle.plain())
+    match svgwrite.node_to_string(bad, svgwrite.minimal())
+        Ok(_)  => test.assert(false)
+        Err(f) =>
+            test.assert(svgfault.offset_of(f) == 8)
+            test.assert(f.message() == "cx=\"NaN\" at byte 8 is not a number")
+
+    test.case("an infinite width in a document, at its offset in the whole text")
+    let wide = svgdoc.rect(geomrect.of_xywh(0.0, 0.0, math.infinity(), 1.0), svgstyle.plain())
+    let d = svgdoc.document(1.0, 1.0, [svgdoc.group([svgdoc.group([]), wide])])
+    let head = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\" viewBox=\"0 0 1 1\"><g><g/><rect "
+    match svgwrite.to_string(d, svgwrite.minimal())
+        Ok(_)  => test.assert(false)
+        Err(f) => test.assert(svgfault.offset_of(f) == str.len(head))
+
+    test.case("a negative infinity in the root's own size")
+    let neg = svgdoc.document(0.0 - math.infinity(), 1.0, [])
+    match svgwrite.to_string(neg, svgwrite.minimal())
+        Ok(_)  => test.assert(false)
+        Err(f) => test.assert(f.message() == "width=\"-inf\" at byte 40 is not a number")
+
+    test.case("the streaming writer writes the text as it is, since it cannot refuse")
+    let (_, first) = svgwrite.next_chunk(svgwrite.writer(neg, svgwrite.minimal()))
+    test.assert(str.contains(first, "width=\"-inf\""))

@@ -1,0 +1,181 @@
+// roundtrip_tests.nv — hand-written documents read, written and read
+// again.
+//
+// The documents are the kinds a program meets: one exported by a
+// drawing program, with its editor's namespaced elements and inline
+// styles; one with units and no view box; and one that uses a paint
+// server.  Each case states what the reader makes of the text, and
+// then that writing the result and reading it back gives the same
+// tree, so that a second write is byte for byte the first.
+
+use std.test
+use std.list
+use srgb
+use svgstyle
+use svgpath
+use svgdoc
+use svgwrite
+use svgread
+
+fn editor_export() -> Str
+    "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\"?>\n"
+     + "<!-- Created with a drawing program -->\n"
+     + "<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\" \"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd\" [\n"
+     + "  <!ENTITY ns \"http://www.w3.org/2000/svg\">\n"
+     + "]>\n"
+     + "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:sodipodi=\"http://sodipodi.sourceforge.net\"\n"
+     + "     width=\"210mm\" height=\"297mm\" viewBox=\"0 0 210 297\" version=\"1.1\">\n"
+     + "  <title>A test page</title>\n"
+     + "  <sodipodi:namedview pagecolor=\"#ffffff\"/>\n"
+     + "  <g id=\"layer1\" sodipodi:label=\"Layer 1\" style=\"fill:#ff0000;stroke:none\" transform=\"translate(10,20)\">\n"
+     + "    <rect id=\"r1\" x=\"5\" y=\"5\" width=\"50\" height=\"25\" ry=\"2\"/>\n"
+     + "    <path style=\"fill:none;stroke:#000000;stroke-width:0.5px;stroke-linecap:round\"\n"
+     + "          d=\"m 10,40 h 20 v 20 c 0,5 -5,10 -10,10 z\"/>\n"
+     + "    <circle cx=\"100\" cy=\"100\" r=\"10\" fill-opacity=\"0.5\" style=\"fill:blue\"/>\n"
+     + "    <text x=\"10 20 30\" y=\"150\" style=\"font-size:8px;font-family:'DejaVu Sans';font-weight:bold\">\n"
+     + "      R&amp;D <tspan>&#65;&#x42;</tspan> <![CDATA[<raw>]]>\n"
+     + "    </text>\n"
+     + "  </g>\n"
+     + "</svg>\n"
+
+fn units_page() -> Str
+    "<svg width=\"2in\" height=\"96pt\" fill=\"green\" stroke=\"currentColor\" color=\"#123456\">"
+     + "<ellipse cx=\"50%\" cy=\"25%\" rx=\"1em\" ry=\"2ex\" font-size=\"10\"/>"
+     + "<line x1=\"0\" y1=\"0\" x2=\"1cm\" y2=\"10mm\" stroke-dasharray=\"2, 1 0.5\"/>"
+     + "<polyline points=\"0,0 10,10 20\" fill=\"inherit\"/>"
+     + "</svg>"
+
+fn gradient_page() -> Str
+    "<svg width=\"100\" height=\"100\" viewBox=\"0 0 100 100\">"
+     + "<defs><linearGradient id=\"g\"><stop offset=\"0\"/><stop offset=\"1\"/></linearGradient></defs>"
+     + "<style>rect { fill: red }</style>"
+     + "<rect width=\"10\" height=\"10\" fill=\"url(#g) blue\" class=\"a\"/>"
+     + "<use href=\"#r\"/><image href=\"a.png\"/><symbol/><switch/><mask/><clipPath/><filter/>"
+     + "<marker/><pattern/><metadata/>"
+     + "</svg>"
+
+fn read(text: Str) -> SvgReadReport
+    match svgread.parse_report(text)
+        Ok(r)  => r
+        Err(_) =>
+            SvgReadReport { document: svgdoc.document(0.0, 0.0, []), skipped_elements: 0 - 1,
+                            skipped_attributes: 0, skipped_names: [], has_dangling_paint: false }
+
+fn written(doc: SvgDocument, style: SvgWriteStyle) -> Str
+    match svgwrite.to_string(doc, style)
+        Ok(s)  => s
+        Err(_) => "refused"
+
+// Whether writing the document, reading it back and writing it again
+// gives the same text in both styles.
+fn round_trips(doc: SvgDocument) -> Bool
+    let a = written(doc, svgwrite.pretty())
+    let b = written(read(a).document, svgwrite.pretty())
+    let c = written(doc, svgwrite.minimal())
+    let d = written(read(c).document, svgwrite.minimal())
+    a == b and c == d
+
+fn paint_of(p: SvgPaint) -> Str
+    svgstyle.paint_to_string(p)
+
+@test
+fn test_a_drawing_programs_export() [io]
+    let r = read(editor_export())
+    let doc = r.document
+    test.case("the viewport keeps its units and the view box its numbers")
+    test.assert(svgstyle.length_to_string(doc.width) == "210mm")
+    test.assert(doc.view_box.height == 297.0)
+
+    test.case("the editor's elements and attributes are skipped and counted")
+    test.assert(r.skipped_elements == 3)
+    test.assert(r.skipped_names == ["title", "sodipodi:namedview", "tspan"])
+    test.assert(r.skipped_attributes == 2)
+    test.assert(r.has_dangling_paint == false)
+
+    test.case("the layer is a group with its transform and its style")
+    test.assert(svgdoc.child_count_of(doc) == 1)
+    let layer = doc.children[0]
+    test.assert(layer.id == "layer1")
+    test.assert(layer.transform.e == 10.0 and layer.transform.f == 20.0)
+    test.assert(paint_of(layer.style.fill) == "#ff0000")
+    test.assert(svgdoc.child_count(layer) == 4)
+
+    test.case("the rectangle inherits the layer's fill and takes rx from ry")
+    let rect = layer.children[0]
+    test.assert(paint_of(rect.style.fill) == "#ff0000")
+    test.assert(paint_of(rect.style.stroke) == "none")
+    match rect.shape
+        SvgRectShape(x, _, w, _, rx, ry) => test.assert(x == 5.0 and w == 50.0 and rx == 2.0 and ry == 2.0)
+        _                                => test.assert(false)
+
+    test.case("the path's inline style overrides the layer's, and its data is absolute")
+    let p = layer.children[1]
+    test.assert(paint_of(p.style.fill) == "none")
+    test.assert(p.style.stroke_width == 0.5)
+    test.assert(svgstyle.cap_to_string(p.style.stroke_cap) == "round")
+    match p.shape
+        SvgPathShape(path) =>
+            test.assert(svgpath.to_string(path, 3) == "M10 40L30 40L30 60C30 65 25 70 20 70Z")
+        _                  => test.assert(false)
+
+    test.case("a style declaration outranks an attribute, and fill-opacity folds into the alpha")
+    let c = layer.children[2]
+    match c.style.fill
+        SvgPaintColor(col) => test.assert(col.rgb.b == 255 and col.a == 128)
+        _                  => test.assert(false)
+
+    test.case("the text is one run, its white space collapsed, its references replaced")
+    let t = layer.children[3]
+    match t.shape
+        SvgTextShape(s, x, y) => test.assert(s == "R&D AB <raw>" and x == 10.0 and y == 150.0)
+        _                     => test.assert(false)
+    test.assert(t.style.font.family == "'DejaVu Sans'")
+    test.assert(t.style.font.size == 8.0 and t.style.font.weight == 700)
+
+    test.case("and the document survives a write and a read in both styles")
+    test.assert(round_trips(doc))
+
+@test
+fn test_units_percentages_and_inheritance_from_the_root() [io]
+    let r = read(units_page())
+    let doc = r.document
+    test.case("with no viewBox a user unit is a pixel, so the view box is the viewport")
+    test.assert(doc.view_box.width == 192.0 and doc.view_box.height == 128.0)
+
+    test.case("a percentage is of the view box, and em and ex of the font size")
+    match doc.children[0].shape
+        SvgEllipseShape(cx, cy, rx, ry) => test.assert(cx == 96.0 and cy == 32.0 and rx == 10.0 and ry == 10.0)
+        _                               => test.assert(false)
+
+    test.case("the root's presentation attributes reach its children")
+    test.assert(paint_of(doc.children[0].style.fill) == "#008000")
+    test.assert(paint_of(doc.children[0].style.stroke) == "#123456")
+
+    test.case("absolute units become user units at 96 to the inch")
+    match doc.children[1].shape
+        SvgLineShape(_, _, x2, y2) =>
+            test.assert(x2 > 37.795 and x2 < 37.796)
+            test.assert(y2 > 37.795 and y2 < 37.796)
+        _                          => test.assert(false)
+    test.assert(doc.children[1].style.stroke_dash == [2.0, 1.0, 0.5])
+
+    test.case("a dangling odd coordinate is dropped, and inherit keeps the parent's value")
+    match doc.children[2].shape
+        SvgPolylineShape(ps) => test.assert(ps.len() == 2)
+        _                    => test.assert(false)
+    test.assert(paint_of(doc.children[2].style.fill) == "#008000")
+    test.assert(round_trips(doc))
+
+@test
+fn test_a_paint_server_and_everything_else_left_out() [io]
+    let r = read(gradient_page())
+    test.case("each skipped element counts once, however much is inside it")
+    test.assert(r.skipped_elements == 12)
+    test.assert(list.len(r.skipped_names) == 8)
+    test.assert(r.skipped_names[0] == "defs" and r.skipped_names[7] == "clipPath")
+    test.assert(r.skipped_attributes == 1)
+
+    test.case("the reference survives, its fallback does not, and the report says it dangles")
+    test.assert(r.has_dangling_paint)
+    test.assert(paint_of(r.document.children[0].style.fill) == "url(#g)")
+    test.assert(round_trips(r.document))

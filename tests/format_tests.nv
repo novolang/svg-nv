@@ -1,0 +1,74 @@
+// format_tests.nv — the number spelling, the style keywords and the
+// fault reports, value by value.
+
+use std.test
+use geompoint
+use geomrect
+use srgb
+use svgstyle
+use svgpath
+use svgdoc
+use svgwrite
+use svgfault
+
+@test
+fn test_the_number_spelling() [io]
+    test.case("rounding carries into the whole part")
+    test.assert(svgwrite.number(1.9996, 3) == "2")
+    test.assert(svgwrite.number(0.0 - 0.0004, 3) == "0")
+    test.assert(svgwrite.number(0.0 - 2.5, 0) == "-3")
+    test.case("a count of decimals is clamped to what a double carries")
+    test.assert(svgwrite.number(0.5, 0 - 3) == "1")
+    test.assert(svgwrite.number(1.0 / 3.0, 40) == "0.333333333333")
+    test.case("a number past the integer range is still written without an exponent")
+    test.assert(svgwrite.number(1.0e20, 2) == "100000000000000000000")
+    test.assert(svgwrite.number(0.0 - 2.5e19, 0) == "-25000000000000000000")
+    test.case("and values with no spelling say so")
+    test.assert(svgwrite.number(math.nan(), 2) == "NaN")
+    test.assert(svgwrite.number(math.infinity(), 2) == "inf")
+    test.case("a compact path drops a leading zero, on either sign")
+    let p = svgpath.line_to(svgpath.move_to(svgpath.empty(), 0.0 - 0.5, 0.25), 0.0 - 0.75, 5.0)
+    test.assert(svgpath.to_string_compact(p, 2) == "M-.5.25-.75 5")
+
+@test
+fn test_the_style_spellings_left() [io]
+    test.case("a reference paints at full coverage")
+    test.assert(svgstyle.paint_opacity(SvgPaintRef("g")) == 1.0)
+    test.case("the remaining keywords")
+    test.assert(svgstyle.cap_to_string(SvgCapSquare) == "square")
+    test.assert(svgstyle.join_to_string(SvgJoinRound) == "round")
+    test.assert(svgstyle.unit_suffix(SvgUnitPt) == "pt")
+    test.assert(svgstyle.unit_suffix(SvgUnitIn) == "in")
+    test.case("the physical units at 96 user units to the inch")
+    test.assert(math.abs(svgstyle.to_user_units(SvgLength { value: 25.4, unit: SvgUnitMm }, 0.0) - 96.0) < 0.000000001)
+    test.assert(math.abs(svgstyle.to_user_units(SvgLength { value: 2.54, unit: SvgUnitCm }, 0.0) - 96.0) < 0.000000001)
+    test.assert(math.abs(svgstyle.to_user_units(SvgLength { value: 72.0, unit: SvgUnitPt }, 0.0) - 96.0) < 0.000000001)
+    test.case("a style with no opacity draws nothing, whatever its paints")
+    test.assert(svgstyle.is_visible(svgstyle.with_opacity(svgstyle.plain(), 0.0)) == false)
+    test.assert(svgstyle.is_visible(svgstyle.stroked(srgb.opaque(srgb.black()), 1.0)))
+    test.assert(svgstyle.is_visible(svgstyle.stroked(srgb.opaque(srgb.black()), 0.0)) == false)
+    test.assert(svgstyle.is_visible(svgstyle.filled(srgb.with_alpha(srgb.black(), 0))) == false)
+
+@test
+fn test_every_fault_has_an_offset_and_a_message() [io]
+    let faults = [SvgTruncated(1), SvgMalformedTag(2, "<"), SvgMismatchedTag(3, "g", "a"),
+                  SvgMalformedAttribute(4, "g"), SvgBadNumber(5, "r", "x"),
+                  SvgBadPathData(6, "X"), SvgBadTransform(7, "f"), SvgBadViewBox(8, "1"),
+                  SvgNoRootElement(9), SvgUnknownEntity(10, "e"), SvgTooDeep(11, 2)]
+    var expected = 1
+    for f in faults
+        test.case("variant ${expected}")
+        test.assert(svgfault.offset_of(f) == expected)
+        test.assert(str.contains(f.message(), "byte ${expected}"))
+        expected = expected + 1
+
+@test
+fn test_a_group_whose_child_draws_nothing() [io]
+    test.case("an empty group inside a group adds nothing to its box")
+    let r = svgdoc.rect(geomrect.of_xywh(1.0, 1.0, 2.0, 2.0), svgstyle.plain())
+    let b = svgdoc.bounds(svgdoc.group([r, svgdoc.group([])]))
+    test.assert(b.min.x == 1.0 and b.max.x == 3.0)
+    test.case("and a document's box is the union of its children's")
+    let d = svgdoc.document(9.0, 9.0, [svgdoc.group([]), r])
+    test.assert(geomrect.width(svgdoc.document_bounds(d)) == 2.0)
+    test.assert(geompoint.origin().x == 0.0)

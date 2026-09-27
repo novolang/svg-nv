@@ -1,0 +1,111 @@
+// pathdata_tests.nv — SVG path data read by svgread.parse_path and
+// checked against tools/pathref.py, an independent reader in Python.
+//
+// Written by tools/pathref.py; edit the cases there and run it again.
+// Each case is a `d` attribute and either the path it normalises to,
+// written by `svgpath.to_string` at six decimals, or the byte offset
+// of the fault it is refused with.
+
+use std.test
+use svgpath
+use svgread
+use svgfault
+
+fn reads_as(d: Str, expected: Str) -> Bool
+    match svgread.parse_path(d)
+        Ok(p)  => svgpath.to_string(p, 6) == expected
+        Err(_) => false
+
+fn refused_at(d: Str, offset: Int) -> Bool
+    match svgread.parse_path(d)
+        Ok(_)  => false
+        Err(f) => svgfault.offset_of(f) == offset
+
+@test
+fn test_path_data_agrees_with_the_python_reader() [io]
+    test.case("reads 'M 10 10 L 20 20'")
+    test.assert(reads_as("M 10 10 L 20 20", "M10 10L20 20"))
+    test.case("reads 'M10,10L20,20'")
+    test.assert(reads_as("M10,10L20,20", "M10 10L20 20"))
+    test.case("reads 'M10 10,20 20'")
+    test.assert(reads_as("M10 10,20 20", "M10 10L20 20"))
+    test.case("reads 'm 10 10 l 5 0 l 0 5 z'")
+    test.assert(reads_as("m 10 10 l 5 0 l 0 5 z", "M10 10L15 10L15 15Z"))
+    test.case("reads 'M 0 0 H 10 V 10 h -5 v -5 Z'")
+    test.assert(reads_as("M 0 0 H 10 V 10 h -5 v -5 Z", "M0 0L10 0L10 10L5 10L5 5Z"))
+    test.case("reads 'M1.5.5'")
+    test.assert(reads_as("M1.5.5", "M1.5 0.5"))
+    test.case("reads 'M-1-2L3-4'")
+    test.assert(reads_as("M-1-2L3-4", "M-1 -2L3 -4"))
+    test.case("reads 'M0 0L.5-.5'")
+    test.assert(reads_as("M0 0L.5-.5", "M0 0L0.5 -0.5"))
+    test.case("reads 'M 0 0 L 1e1 2E-1'")
+    test.assert(reads_as("M 0 0 L 1e1 2E-1", "M0 0L10 0.2"))
+    test.case("reads 'M0,0 L+5,+5'")
+    test.assert(reads_as("M0,0 L+5,+5", "M0 0L5 5"))
+    test.case("reads 'M 0 0 L 5. 5.'")
+    test.assert(reads_as("M 0 0 L 5. 5.", "M0 0L5 5"))
+    test.case("reads 'M 0 0 1 1 2 2'")
+    test.assert(reads_as("M 0 0 1 1 2 2", "M0 0L1 1L2 2"))
+    test.case("reads 'm 1 1 2 2 3 3'")
+    test.assert(reads_as("m 1 1 2 2 3 3", "M1 1L3 3L6 6"))
+    test.case("reads 'M 10 10 h 5 5'")
+    test.assert(reads_as("M 10 10 h 5 5", "M10 10L15 10L20 10"))
+    test.case("reads 'M0 0v1 1'")
+    test.assert(reads_as("M0 0v1 1", "M0 0L0 1L0 2"))
+    test.case("reads 'M0 0C0 1 1 1 1 0S2 -1 2 0'")
+    test.assert(reads_as("M0 0C0 1 1 1 1 0S2 -1 2 0", "M0 0C0 1 1 1 1 0C1 -1 2 -1 2 0"))
+    test.case("reads 'M 0 0 c 1 1 2 2 3 3 s 1 1 2 2'")
+    test.assert(reads_as("M 0 0 c 1 1 2 2 3 3 s 1 1 2 2", "M0 0C1 1 2 2 3 3C4 4 4 4 5 5"))
+    test.case("reads 'M 0 0 S 1 1 2 0'")
+    test.assert(reads_as("M 0 0 S 1 1 2 0", "M0 0C0 0 1 1 2 0"))
+    test.case("reads 'M0 0Q1 1 2 0T4 0t2 0'")
+    test.assert(reads_as("M0 0Q1 1 2 0T4 0t2 0", "M0 0Q1 1 2 0Q3 -1 4 0Q5 1 6 0"))
+    test.case("reads 'M 0 0 T 2 0'")
+    test.assert(reads_as("M 0 0 T 2 0", "M0 0Q0 0 2 0"))
+    test.case("reads 'M 0 0 Q 1 1 2 0 L 3 0 T 5 0'")
+    test.assert(reads_as("M 0 0 Q 1 1 2 0 L 3 0 T 5 0", "M0 0Q1 1 2 0L3 0Q3 0 5 0"))
+    test.case("reads 'M 0 0 C 1 1 2 1 3 0 Q 4 1 5 0 S 7 1 8 0'")
+    test.assert(reads_as("M 0 0 C 1 1 2 1 3 0 Q 4 1 5 0 S 7 1 8 0", "M0 0C1 1 2 1 3 0Q4 1 5 0C5 0 7 1 8 0"))
+    test.case("reads 'M0 0A5 5 0 0 1 10 0'")
+    test.assert(reads_as("M0 0A5 5 0 0 1 10 0", "M0 0A5 5 0 0 1 10 0"))
+    test.case("reads 'M0 0a5 5 30 1 0 10 0'")
+    test.assert(reads_as("M0 0a5 5 30 1 0 10 0", "M0 0A5 5 30 1 0 10 0"))
+    test.case("reads 'M0 0A10 10 0 1110 10'")
+    test.assert(reads_as("M0 0A10 10 0 1110 10", "M0 0A10 10 0 1 1 10 10"))
+    test.case("reads 'M0 0a1 1 0 00 1 1'")
+    test.assert(reads_as("M0 0a1 1 0 00 1 1", "M0 0A1 1 0 0 0 1 1"))
+    test.case("reads 'M 0 0 A -5 -5 45 1 1 10 0'")
+    test.assert(reads_as("M 0 0 A -5 -5 45 1 1 10 0", "M0 0A5 5 45 1 1 10 0"))
+    test.case("reads 'M 1 1 L 2 2 z m 1 1'")
+    test.assert(reads_as("M 1 1 L 2 2 z m 1 1", "M1 1L2 2ZM2 2"))
+    test.case("reads 'M 1 1 L 5 1 Z l 0 5'")
+    test.assert(reads_as("M 1 1 L 5 1 Z l 0 5", "M1 1L5 1ZL1 6"))
+    test.case("reads 'M0 0L1 1M5 5L6 6'")
+    test.assert(reads_as("M0 0L1 1M5 5L6 6", "M0 0L1 1M5 5L6 6"))
+    test.case("reads 'M 0 0 z z'")
+    test.assert(reads_as("M 0 0 z z", "M0 0ZZ"))
+    test.case("reads ''")
+    test.assert(reads_as("", ""))
+    test.case("reads '   \\t\\n'")
+    test.assert(reads_as("   \t\n", ""))
+    test.case("refuses 'L 0 0' at byte 0")
+    test.assert(refused_at("L 0 0", 0))
+    test.case("refuses 'M 0' at byte 3")
+    test.assert(refused_at("M 0", 3))
+    test.case("refuses 'M 0 0 X 5' at byte 6")
+    test.assert(refused_at("M 0 0 X 5", 6))
+    test.case("refuses 'M 0 0 Z 5' at byte 8")
+    test.assert(refused_at("M 0 0 Z 5", 8))
+    test.case("refuses 'M 0 0 A 5 5 0 2 0 1 1' at byte 14")
+    test.assert(refused_at("M 0 0 A 5 5 0 2 0 1 1", 14))
+    test.case("refuses 'M 0 0 L 5 ,' at byte 11")
+    test.assert(refused_at("M 0 0 L 5 ,", 11))
+    test.case("refuses '5 5' at byte 0")
+    test.assert(refused_at("5 5", 0))
+    test.case("refuses 'M 0 0 L 1 1 L' at byte 13")
+    test.assert(refused_at("M 0 0 L 1 1 L", 13))
+    test.case("refuses 'M 0 0 C 1 1 2 2' at byte 15")
+    test.assert(refused_at("M 0 0 C 1 1 2 2", 15))
+    test.case("refuses 'M e5 0' at byte 2")
+    test.assert(refused_at("M e5 0", 2))

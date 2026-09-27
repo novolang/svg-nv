@@ -1,0 +1,234 @@
+// geometry_tests.nv — the path arithmetic: bounds, flattening, arcs as
+// cubics and paths through transforms.
+//
+// Where an answer can be worked out by hand it is stated exactly: a
+// half circle's box, a square's length.  Where it cannot, two
+// independent routes to it are compared.  A path's tight box is checked
+// against the box of the path flattened at a small tolerance, which
+// can differ from it by no more than that tolerance, and a transformed
+// path is checked against the original's flattened points mapped one
+// by one.  An arc exercises the centre parameterisation of SVG 1.1
+// appendix F.6 on every route.
+
+use std.test
+use std.list
+use geompoint
+use geomrect
+use geomxform
+use svgpath
+use svgread
+use svgdoc
+use svgstyle
+
+fn near(a: Float, b: Float, eps: Float) -> Bool
+    math.abs(a - b) <= eps
+
+fn path(d: Str) -> SvgPath
+    match svgread.parse_path(d)
+        Ok(p)  => p
+        Err(_) => svgpath.empty()
+
+// The box of every point the path flattens to.
+fn flat_box(p: SvgPath, tol: Float) -> GeomRectF
+    var box = geomrect.empty()
+    for run in svgpath.flatten(p, tol)
+        for q in run.points
+            box = geomrect.extend(box, q)
+    box
+
+// The same box after mapping each flattened point through `t`.
+fn mapped_flat_box(p: SvgPath, t: GeomXform, tol: Float) -> GeomRectF
+    var box = geomrect.empty()
+    for run in svgpath.flatten(p, tol)
+        for q in run.points
+            box = geomrect.extend(box, geomxform.apply_point(t, q))
+    box
+
+fn same_box(a: GeomRectF, b: GeomRectF, eps: Float) -> Bool
+    near(a.min.x, b.min.x, eps) and near(a.min.y, b.min.y, eps) and near(a.max.x, b.max.x, eps)
+        and near(a.max.y, b.max.y, eps)
+
+// Paths that between them reach every command and every arc case: the
+// two sweeps, the two arc sizes, a rotated ellipse, radii too small to
+// reach, and a curve whose turning point is inside it.
+fn samples() -> [Str]
+    ["M0 0A5 5 0 0 1 10 0",
+     "M0 0A5 5 0 0 0 10 0",
+     "M0 0A10 5 30 1 1 10 10",
+     "M0 0A10 5 30 1 0 10 10",
+     "M0 0A10 5 30 0 0 10 10",
+     "M0 0A1 1 0 0 1 10 0",
+     "M0 0A8 3 -60 1 1 4 -7Z",
+     "M0 0Q10 20 20 0T40 0",
+     "M0 0C0 10 20 -10 20 0S40 10 30 30",
+     "M5 5L15 5L15 15L5 15Z"]
+
+@test
+fn test_an_arcs_box_is_worked_out_exactly() [io]
+    test.case("a half circle of radius 5 above its chord")
+    let b = svgpath.bounds(path("M0 0A5 5 0 0 1 10 0"))
+    test.assert(near(b.min.x, 0.0, 0.000001) and near(b.max.x, 10.0, 0.000001))
+    test.assert(near(b.min.y, 0.0 - 5.0, 0.000001) and near(b.max.y, 0.0, 0.000001))
+
+    test.case("the same half circle below it, the other sweep")
+    let under = svgpath.bounds(path("M0 0A5 5 0 0 0 10 0"))
+    test.assert(near(under.max.y, 5.0, 0.000001))
+
+    test.case("radii too small to reach the endpoint are scaled up until they do")
+    let small = svgpath.bounds(path("M0 0A1 1 0 0 1 10 0"))
+    test.assert(near(small.min.y, 0.0 - 5.0, 0.000001))
+
+    test.case("an arc with a zero radius is a straight line, and one to its own start is nothing")
+    test.assert(geomrect.height(svgpath.bounds(path("M0 0A0 5 0 0 1 10 0"))) == 0.0)
+    test.assert(geomrect.width(svgpath.bounds(path("M3 3A5 5 0 0 1 3 3"))) == 0.0)
+
+@test
+fn test_the_tight_box_agrees_with_the_flattened_one() [io]
+    for d in samples()
+        test.case("the box of ${d}")
+        let p = path(d)
+        test.assert(same_box(svgpath.bounds(p), flat_box(p, 0.001), 0.0011))
+
+    test.case("a quadratic's turning point is inside the box, not its control point")
+    let q = svgpath.bounds(path("M0 0Q10 20 20 0"))
+    test.assert(near(q.max.y, 10.0, 0.000001))
+
+@test
+fn test_arcs_as_cubics_stay_on_the_ellipse() [io]
+    for d in samples()
+        test.case("the cubics of ${d}")
+        let p = path(d)
+        let c = svgpath.to_cubics(p)
+        test.assert(same_box(svgpath.bounds(c), svgpath.bounds(p), 0.005))
+
+    test.case("a full turn in two halves is four quarter cubics")
+    let circle = svgpath.to_cubics(svgpath.of_ellipse(geompoint.origin(), 1.0, 1.0))
+    test.assert(svgpath.command_count(circle) == 6)
+
+    test.case("a degenerate arc becomes a line, and an arc to its start disappears")
+    test.assert(svgpath.command_count(svgpath.to_cubics(path("M0 0A0 5 0 0 1 10 0"))) == 2)
+    test.assert(svgpath.command_count(svgpath.to_cubics(path("M3 3A5 5 0 0 1 3 3"))) == 1)
+
+@test
+fn test_a_transformed_path_is_the_path_transformed() [io]
+    let turn = geomxform.of_matrix(math.cos(0.5), math.sin(0.5), 0.0 - math.sin(0.5),
+                                   math.cos(0.5), 3.0, 4.0)
+    let squash = geomxform.scaling(2.0, 0.5)
+    let mirror = geomxform.scaling(0.0 - 1.0, 1.0)
+    let skew = geomxform.of_matrix(1.0, 0.0, 0.7, 1.0, 0.0, 0.0)
+    for t in [turn, squash, mirror, skew, geomxform.translation(5.0, 0.0 - 2.0)]
+        for d in samples()
+            test.case("${d} through a transform")
+            let p = path(d)
+            test.assert(same_box(svgpath.bounds(svgpath.transform(p, t)),
+                                 mapped_flat_box(p, t, 0.0005), 0.003))
+
+    test.case("a mirror reverses an arc's sweep, and a translation keeps its radii")
+    match svgpath.commands_of(svgpath.transform(path("M0 0A5 3 0 0 1 10 0"), mirror))[1]
+        SvgArcTo(_, _, _, _, sweep, _, _) => test.assert(sweep == false)
+        _                                 => test.assert(false)
+    match svgpath.commands_of(svgpath.transform(path("M0 0A5 3 0.2 0 1 10 0"),
+                                                geomxform.translation(1.0, 1.0)))[1]
+        SvgArcTo(rx, ry, rot, _, _, x, _) =>
+            test.assert(rx == 5.0 and ry == 3.0 and near(rot, 0.2 * math.pi() / 180.0, 0.0000001))
+            test.assert(x == 11.0)
+        _                                 => test.assert(false)
+
+@test
+fn test_flattening_and_length() [io]
+    test.case("a closed square is four sides long, its closing side included")
+    let sq = svgpath.of_rect(geomrect.of_xywh(0.0, 0.0, 10.0, 10.0), 0.0, 0.0)
+    test.assert(svgpath.length(sq, 0.1) == 40.0)
+
+    test.case("its last corner repeats the first, so the run keeps four points")
+    let runs = svgpath.flatten(sq, 0.1)
+    test.assert(runs[0].points.len() == 4 and runs[0].closed)
+
+    test.case("a circle's length approaches its circumference")
+    let c = svgpath.of_ellipse(geompoint.origin(), 10.0, 10.0)
+    test.assert(near(svgpath.length(c, 0.0001), 2.0 * math.pi() * 10.0, 0.01))
+
+    test.case("each curve flattens within the tolerance")
+    let q = path("M0 0Q10 20 20 0")
+    test.assert(near(svgpath.length(q, 0.00001), 29.5789, 0.001))
+    test.assert(near(svgpath.length(path("M0 0C0 10 10 10 10 0"), 0.00001), 20.0 * 0.9994, 0.05))
+
+    test.case("a tolerance of zero stops at 4096 pieces a curve")
+    test.assert(svgpath.flatten(q, 0.0)[0].points.len() == 4097)
+    test.assert(svgpath.flatten(path("M0 0Q0 0 0 0"), 0.0)[0].points.len() == 4097)
+
+    test.case("commands before the first move draw nothing, and a lone move makes no run")
+    test.assert(list.len(svgpath.flatten(svgpath.of_commands([SvgLineTo(1.0, 1.0),
+                                                               SvgQuadTo(1.0, 1.0, 2.0, 2.0),
+                                                               SvgCubicTo(1.0, 1.0, 2.0, 2.0,
+                                                                          3.0, 3.0),
+                                                               SvgArcTo(1.0, 1.0, 0.0, false,
+                                                                        true, 4.0, 3.0),
+                                                               SvgMoveTo(0.0, 0.0),
+                                                               SvgMoveTo(5.0, 5.0),
+                                                               SvgLineTo(6.0, 5.0)]),
+                                     0.1)) == 1)
+
+    test.case("a path that goes on after a close starts again from the subpath's start")
+    let after = svgpath.flatten(path("M0 0L10 0ZL0 10"), 0.1)
+    test.assert(list.len(after) == 2)
+    test.assert(after[1].points[0].x == 0.0 and after[1].points[1].y == 10.0)
+
+@test
+fn test_the_compact_spelling_reads_back_as_the_same_path() [io]
+    let long = "M0 0C0 10 10 10 10 0S20 -10 20 0S30 10 30 0Q35 5 40 0T50 0T60 0"
+        + "L60 10L70 10L70 20A5 5 0 0 1 80 20a5 5 0 1 0 10 0Zm5 5l-5 -5h10"
+    let p = path(long)
+    let compact = svgpath.to_string_compact(p, 3)
+    test.case("it uses the shorthands where they fit, and repeats no letter it can leave out")
+    test.assert(compact == "M0 0C0 10 10 10 10 0S20-10 20 0 30 10 30 0q5 5 10 0T50 0 60 0V10H70V20a5 5 0 0 1 10 0 5 5 0 1 0 10 0ZM5 5 0 0H10")
+    test.case("and it reads back as the absolute path")
+    test.assert(svgpath.to_string(path(compact), 3) == svgpath.to_string(p, 3))
+    test.assert(str.len(compact) < str.len(svgpath.to_string(p, 3)))
+
+    test.case("a smooth curve with no curve before it reflects the pen")
+    test.assert(svgpath.to_string_compact(path("M1 1C1 1 2 2 3 1Q3 1 4 4"), 2)
+                == "M1 1S2 2 3 1T4 4")
+
+    test.case("a fraction after a fraction needs no separator, a whole number does")
+    test.assert(svgpath.to_string_compact(path("M0.5 0.25L1 .5"), 2) == "M.5.25 1 .5")
+
+@test
+fn test_the_document_walks_draw_every_shape() [io]
+    let st = svgstyle.plain()
+    let shapes = [svgdoc.circle(geompoint.ptf(5.0, 5.0), 5.0, st),
+                  svgdoc.ellipse(geompoint.ptf(20.0, 5.0), 5.0, 2.0, st),
+                  svgdoc.line(geompoint.ptf(0.0, 20.0), geompoint.ptf(30.0, 20.0), st),
+                  svgdoc.polyline([geompoint.ptf(0.0, 30.0), geompoint.ptf(5.0, 35.0)], st),
+                  svgdoc.polygon([geompoint.ptf(0.0, 40.0), geompoint.ptf(5.0, 45.0),
+                                  geompoint.ptf(0.0, 45.0)],
+                                  st),
+                  svgdoc.path(path("M0 50L10 60"), st),
+                  svgdoc.group([svgdoc.rect(geomrect.of_xywh(40.0, 0.0, 5.0, 5.0), st)])]
+    let g = svgdoc.with_transform(svgdoc.group(shapes), geomxform.scaling(2.0, 2.0))
+    test.case("to_path converts each shape and applies every transform")
+    let p = svgdoc.to_path(g)
+    test.assert(svgpath.subpath_count(p) == 7)
+    test.assert(same_box(svgpath.bounds(p), geomrect.of_xywh(0.0, 0.0, 90.0, 120.0), 0.000001))
+    test.assert(same_box(svgdoc.bounds(g), svgpath.bounds(p), 0.000001))
+
+    test.case("a horizontal line has a box of no height, and still counts in a union")
+    let flat = svgdoc.group([svgdoc.line(geompoint.ptf(0.0, 5.0), geompoint.ptf(10.0, 5.0), st)])
+    test.assert(geomrect.width(svgdoc.bounds(flat)) == 10.0)
+
+    test.case("text is boxed by its estimate, placed by its anchor")
+    let at = geompoint.ptf(100.0, 50.0)
+    let start = svgdoc.bounds(svgdoc.text("abcd", at, st))
+    let mid = svgdoc.bounds(svgdoc.text("abcd", at, svgstyle.with_anchor(st, SvgAnchorMiddle)))
+    let end = svgdoc.bounds(svgdoc.text("abcd", at, svgstyle.with_anchor(st, SvgAnchorEnd)))
+    test.assert(start.min.x == 100.0 and near(start.max.x, 100.0 + 4.0 * 16.0 * 0.55, 0.000001))
+    test.assert(near(mid.min.x + mid.max.x, 200.0, 0.000001))
+    test.assert(end.max.x == 100.0)
+    test.assert(near(start.min.y, 50.0 - 12.8, 0.000001) and near(start.max.y, 53.2, 0.000001))
+
+    test.case("a code point is one advance however many bytes it takes")
+    test.assert(svgdoc.text_advance_estimate("é€", 10.0) == 2.0 * 10.0 * 0.55)
+
+    test.case("an empty group's box is empty and its path has no commands")
+    test.assert(geomrect.is_empty(svgdoc.bounds(svgdoc.group([]))))
+    test.assert(svgpath.command_count(svgdoc.to_path(svgdoc.group([]))) == 0)
