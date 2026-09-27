@@ -22,7 +22,7 @@ category    = "graphics"
 tags        = ["svg", "vector", "xml", "path", "usvg", "svgwrite", "drawing"]
 repository  = "https://github.com/novolang/svg-nv"
 maintainers = ["novo-lang"]
-novo        = ">= 0.8.9"
+novo        = ">= 0.13.0"
 
 # A library: no `main`, so `novo pkg build` type-checks and
 # effect-checks every module under `src/` and writes no binary.
@@ -31,18 +31,10 @@ novo        = ">= 0.8.9"
 "README.md" = "Reading and writing SVG as a value"
 
 [dependencies]
-# geometry-nv is a PATH while this lane develops the two together; the
-# coordinator converts it to `^0.0.1` before publish and publishes
-# geometry-nv first, because a package cannot be published ahead of what
-# it depends on.  The dependency is real rather than decorative: a
-# `transform` attribute is a `GeomXform`, a `viewBox` is a `GeomRectF`,
-# and `fill-rule` is its `GeomFillRule` — one fill rule in the registry
-# rather than two that have to agree.
-geometry-nv = "^0.0.1"
+# A `transform` attribute is a geometry-nv `GeomXform` at the edge, a
+# `viewBox` is a `GeomRectF`, and `fill-rule` is its `GeomFillRule`.
+geometry-nv = "^0.1.0"
 
-# color-nv is published, so it is a range.  Under the caret rule
-# `^0.0.1` means exactly 0.0.1: a `0.0.x` version has no compatible
-# neighbours.  Every colour in an SVG document is its `Srgba8`, which is
-# also what png-nv, qoi-nv and image-nv speak — so a plot rendered to
-# SVG and the same plot rendered to a PNG cannot disagree about a shade.
-color-nv    = "^0.0.1"
+# Every colour in a document is color-nv's `Srgba8`, and every colour
+# the reader meets is parsed by its `colortext.parse`.
+color-nv    = "^0.1.1"

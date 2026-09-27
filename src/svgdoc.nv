@@ -178,7 +178,8 @@ pub struct SvgDocument
 //     println("${svgdoc.document(640.0, 480.0, []).view_box.width}")
 // ```
 pub fn document(width: Float, height: Float, children: [SvgNode]) -> SvgDocument
-    todo("svg-nv.svgdoc.document")
+    document_with(svgstyle.user(width), svgstyle.user(height), view_box(0.0, 0.0, width, height),
+                  children)
 
 // A document with its viewport and its user coordinate system named
 // separately.
@@ -194,7 +195,7 @@ pub fn document(width: Float, height: Float, children: [SvgNode]) -> SvgDocument
 // ```
 pub fn document_with(width: SvgLength, height: SvgLength, view_box: SvgViewBox,
                      children: [SvgNode]) -> SvgDocument
-    todo("svg-nv.svgdoc.document_with")
+    SvgDocument { width: width, height: height, view_box: view_box, children: children }
 
 // A view box from four numbers.
 //
@@ -205,7 +206,7 @@ pub fn document_with(width: SvgLength, height: SvgLength, view_box: SvgViewBox,
 //     println("${svgdoc.view_box(0.0, 0.0, 640.0, 480.0).height}")
 // ```
 pub fn view_box(x: Float, y: Float, width: Float, height: Float) -> SvgViewBox
-    todo("svg-nv.svgdoc.view_box")
+    SvgViewBox { x: x, y: y, width: width, height: height }
 
 // A view box as the rectangle it is.
 //
@@ -217,7 +218,7 @@ pub fn view_box(x: Float, y: Float, width: Float, height: Float) -> SvgViewBox
 //     println("${geomrect.width(svgdoc.view_box_rect(svgdoc.view_box(0.0, 0.0, 4.0, 3.0)))}")
 // ```
 pub fn view_box_rect(v: SvgViewBox) -> GeomRectF
-    todo("svg-nv.svgdoc.view_box_rect")
+    geomrect.of_xywh(v.x, v.y, v.width, v.height)
 
 // A rectangle as a view box.
 //
@@ -229,7 +230,7 @@ pub fn view_box_rect(v: SvgViewBox) -> GeomRectF
 //     println("${svgdoc.view_box_of(geomrect.of_xywh(0.0, 0.0, 4.0, 3.0)).width}")
 // ```
 pub fn view_box_of(r: GeomRectF) -> SvgViewBox
-    todo("svg-nv.svgdoc.view_box_of")
+    view_box(r.min.x, r.min.y, geomrect.width(r), geomrect.height(r))
 
 // The transform that changes nothing.
 //
@@ -240,7 +241,7 @@ pub fn view_box_of(r: GeomRectF) -> SvgViewBox
 //     println("${svgdoc.no_transform().a}")
 // ```
 pub fn no_transform() -> SvgTransform
-    todo("svg-nv.svgdoc.no_transform")
+    of_xform(geomxform.identity())
 
 // A document transform as geometry-nv's, so the algebra applies.
 //
@@ -252,7 +253,7 @@ pub fn no_transform() -> SvgTransform
 //     println("${geomxform.determinant(svgdoc.to_xform(svgdoc.no_transform()))}")
 // ```
 pub fn to_xform(t: SvgTransform) -> GeomXform
-    todo("svg-nv.svgdoc.to_xform")
+    geomxform.of_matrix(t.a, t.b, t.c, t.d, t.e, t.f)
 
 // A `GeomXform` as a document transform.
 //
@@ -264,7 +265,7 @@ pub fn to_xform(t: SvgTransform) -> GeomXform
 //     println("${svgdoc.of_xform(geomxform.scaling(2.0, 2.0)).a}")
 // ```
 pub fn of_xform(x: GeomXform) -> SvgTransform
-    todo("svg-nv.svgdoc.of_xform")
+    SvgTransform { a: x.a, b: x.b, c: x.c, d: x.d, e: x.e, f: x.f }
 
 // A group of children, with the default style and no transform.
 //
@@ -275,7 +276,7 @@ pub fn of_xform(x: GeomXform) -> SvgTransform
 //     println("${svgdoc.child_count(svgdoc.group([]))}")
 // ```
 pub fn group(children: [SvgNode]) -> SvgNode
-    todo("svg-nv.svgdoc.group")
+    node(SvgGroupShape, svgstyle.plain(), children)
 
 // A rectangle node.
 //
@@ -289,7 +290,8 @@ pub fn group(children: [SvgNode]) -> SvgNode
 //     println(svgdoc.shape_tag(n.shape))
 // ```
 pub fn rect(r: GeomRectF, style: SvgStyle) -> SvgNode
-    todo("svg-nv.svgdoc.rect")
+    node(SvgRectShape(r.min.x, r.min.y, geomrect.width(r), geomrect.height(r), 0.0, 0.0), style,
+         [])
 
 // A rectangle node with rounded corners.
 //
@@ -304,7 +306,8 @@ pub fn rect(r: GeomRectF, style: SvgStyle) -> SvgNode
 //     println(svgdoc.shape_tag(n.shape))
 // ```
 pub fn rounded_rect(r: GeomRectF, rx: Float, ry: Float, style: SvgStyle) -> SvgNode
-    todo("svg-nv.svgdoc.rounded_rect")
+    node(SvgRectShape(r.min.x, r.min.y, geomrect.width(r), geomrect.height(r), rx, ry), style,
+         [])
 
 // A circle node.
 //
@@ -318,7 +321,7 @@ pub fn rounded_rect(r: GeomRectF, rx: Float, ry: Float, style: SvgStyle) -> SvgN
 //     println(svgdoc.shape_tag(n.shape))
 // ```
 pub fn circle(center: GeomPointF, r: Float, style: SvgStyle) -> SvgNode
-    todo("svg-nv.svgdoc.circle")
+    node(SvgCircleShape(center.x, center.y, r), style, [])
 
 // An ellipse node.
 //
@@ -332,7 +335,7 @@ pub fn circle(center: GeomPointF, r: Float, style: SvgStyle) -> SvgNode
 //     println(svgdoc.shape_tag(n.shape))
 // ```
 pub fn ellipse(center: GeomPointF, rx: Float, ry: Float, style: SvgStyle) -> SvgNode
-    todo("svg-nv.svgdoc.ellipse")
+    node(SvgEllipseShape(center.x, center.y, rx, ry), style, [])
 
 // A line node.
 //
@@ -346,7 +349,7 @@ pub fn ellipse(center: GeomPointF, rx: Float, ry: Float, style: SvgStyle) -> Svg
 //     println(svgdoc.shape_tag(n.shape))
 // ```
 pub fn line(from: GeomPointF, to: GeomPointF, style: SvgStyle) -> SvgNode
-    todo("svg-nv.svgdoc.line")
+    node(SvgLineShape(from.x, from.y, to.x, to.y), style, [])
 
 // A polyline node: connected segments, not closed.
 //
@@ -360,7 +363,7 @@ pub fn line(from: GeomPointF, to: GeomPointF, style: SvgStyle) -> SvgNode
 //     println(svgdoc.shape_tag(svgdoc.polyline(ps, svgstyle.plain()).shape))
 // ```
 pub fn polyline(points: [GeomPointF], style: SvgStyle) -> SvgNode
-    todo("svg-nv.svgdoc.polyline")
+    node(SvgPolylineShape(points), style, [])
 
 // A polygon node: the same, closed.
 //
@@ -374,7 +377,7 @@ pub fn polyline(points: [GeomPointF], style: SvgStyle) -> SvgNode
 //     println(svgdoc.shape_tag(svgdoc.polygon(ps, svgstyle.plain()).shape))
 // ```
 pub fn polygon(points: [GeomPointF], style: SvgStyle) -> SvgNode
-    todo("svg-nv.svgdoc.polygon")
+    node(SvgPolygonShape(points), style, [])
 
 // A path node.
 //
@@ -387,7 +390,7 @@ pub fn polygon(points: [GeomPointF], style: SvgStyle) -> SvgNode
 //     println(svgdoc.shape_tag(svgdoc.path(svgpath.empty(), svgstyle.plain()).shape))
 // ```
 pub fn path(p: SvgPath, style: SvgStyle) -> SvgNode
-    todo("svg-nv.svgdoc.path")
+    node(SvgPathShape(p), style, [])
 
 // A text node: one run, at one anchor point.
 //
@@ -401,7 +404,7 @@ pub fn path(p: SvgPath, style: SvgStyle) -> SvgNode
 //     println(svgdoc.shape_tag(n.shape))
 // ```
 pub fn text(content: Str, at: GeomPointF, style: SvgStyle) -> SvgNode
-    todo("svg-nv.svgdoc.text")
+    node(SvgTextShape(content, at.x, at.y), style, [])
 
 // The same node with a transform on it.
 //
@@ -414,7 +417,8 @@ pub fn text(content: Str, at: GeomPointF, style: SvgStyle) -> SvgNode
 //     println("${n.transform.e}")
 // ```
 pub fn with_transform(n: SvgNode, t: GeomXform) -> SvgNode
-    todo("svg-nv.svgdoc.with_transform")
+    SvgNode { shape: n.shape, style: n.style, transform: of_xform(t), id: n.id,
+              children: n.children }
 
 // The same node with an id.
 //
@@ -425,7 +429,8 @@ pub fn with_transform(n: SvgNode, t: GeomXform) -> SvgNode
 //     println(svgdoc.with_id(svgdoc.group([]), "axis").id)
 // ```
 pub fn with_id(n: SvgNode, id: Str) -> SvgNode
-    todo("svg-nv.svgdoc.with_id")
+    SvgNode { shape: n.shape, style: n.style, transform: n.transform, id: id,
+              children: n.children }
 
 // The same node with a different style.
 //
@@ -438,7 +443,8 @@ pub fn with_id(n: SvgNode, id: Str) -> SvgNode
 //     println("${n.style.opacity}")
 // ```
 pub fn with_style(n: SvgNode, style: SvgStyle) -> SvgNode
-    todo("svg-nv.svgdoc.with_style")
+    SvgNode { shape: n.shape, style: style, transform: n.transform, id: n.id,
+              children: n.children }
 
 // The same node with one more child on the end.
 //
@@ -453,7 +459,10 @@ pub fn with_style(n: SvgNode, style: SvgStyle) -> SvgNode
 //     println("${svgdoc.child_count(svgdoc.add_child(svgdoc.group([]), svgdoc.group([])))}")
 // ```
 pub fn add_child(parent: SvgNode, child: SvgNode) -> SvgNode
-    todo("svg-nv.svgdoc.add_child")
+    var kids = list.clone(parent.children)
+    list.push(kids, child)
+    SvgNode { shape: parent.shape, style: parent.style, transform: parent.transform,
+              id: parent.id, children: kids }
 
 // The same document with one more top-level element.
 //
@@ -465,7 +474,9 @@ pub fn add_child(parent: SvgNode, child: SvgNode) -> SvgNode
 //     println("${svgdoc.child_count_of(d)}")
 // ```
 pub fn add(doc: SvgDocument, child: SvgNode) -> SvgDocument
-    todo("svg-nv.svgdoc.add")
+    var kids = list.clone(doc.children)
+    list.push(kids, child)
+    SvgDocument { width: doc.width, height: doc.height, view_box: doc.view_box, children: kids }
 
 // How many children a node has.
 //
@@ -476,7 +487,7 @@ pub fn add(doc: SvgDocument, child: SvgNode) -> SvgDocument
 //     println("${svgdoc.child_count(svgdoc.group([]))}")
 // ```
 pub fn child_count(n: SvgNode) -> Int
-    todo("svg-nv.svgdoc.child_count")
+    list.len(n.children)
 
 // How many top-level elements a document has.
 //
@@ -487,7 +498,7 @@ pub fn child_count(n: SvgNode) -> Int
 //     println("${svgdoc.child_count_of(svgdoc.document(10.0, 10.0, []))}")
 // ```
 pub fn child_count_of(doc: SvgDocument) -> Int
-    todo("svg-nv.svgdoc.child_count_of")
+    list.len(doc.children)
 
 // How many nodes the whole subtree holds, this one included.
 //
@@ -498,7 +509,10 @@ pub fn child_count_of(doc: SvgDocument) -> Int
 //     println("${svgdoc.node_count(svgdoc.group([]))}")
 // ```
 pub fn node_count(n: SvgNode) -> Int
-    todo("svg-nv.svgdoc.node_count")
+    var total = 1
+    for k in n.children
+        total = total + node_count(k)
+    total
 
 // Whether the shape is one that can have children — which is only the
 // group.
@@ -510,7 +524,9 @@ pub fn node_count(n: SvgNode) -> Int
 //     println("${svgdoc.is_leaf(svgdoc.group([]))}")
 // ```
 pub fn is_leaf(n: SvgNode) -> Bool
-    todo("svg-nv.svgdoc.is_leaf")
+    match n.shape
+        SvgGroupShape => false
+        _             => true
 
 // The element name a shape is written as: `"g"`, `"rect"`, `"path"`.
 //
@@ -521,7 +537,16 @@ pub fn is_leaf(n: SvgNode) -> Bool
 //     println(svgdoc.shape_tag(SvgGroupShape))
 // ```
 pub fn shape_tag(s: SvgShape) -> Str
-    todo("svg-nv.svgdoc.shape_tag")
+    match s
+        SvgGroupShape                  => "g"
+        SvgRectShape(_, _, _, _, _, _) => "rect"
+        SvgCircleShape(_, _, _)        => "circle"
+        SvgEllipseShape(_, _, _, _)    => "ellipse"
+        SvgLineShape(_, _, _, _)       => "line"
+        SvgPolylineShape(_)            => "polyline"
+        SvgPolygonShape(_)             => "polygon"
+        SvgPathShape(_)                => "path"
+        SvgTextShape(_, _, _)          => "text"
 
 // The node whose id is this, anywhere in the subtree, or the subtree's
 // own root when there is none.
@@ -538,7 +563,10 @@ pub fn shape_tag(s: SvgShape) -> Str
 //     println(svgdoc.find_by_id(svgdoc.group([]), "axis").id)
 // ```
 pub fn find_by_id(n: SvgNode, id: Str) -> SvgNode
-    todo("svg-nv.svgdoc.find_by_id")
+    for m in walk(n)
+        if m.id == id
+            return m
+    n
 
 // Whether any node in the subtree carries this id.
 //
@@ -549,7 +577,7 @@ pub fn find_by_id(n: SvgNode, id: Str) -> SvgNode
 //     println("${svgdoc.has_id(svgdoc.group([]), "axis")}")
 // ```
 pub fn has_id(n: SvgNode, id: Str) -> Bool
-    todo("svg-nv.svgdoc.has_id")
+    list.any(walk(n), m => m.id == id)
 
 // Every node of the subtree, parents before children, as one list.
 //
@@ -565,7 +593,9 @@ pub fn has_id(n: SvgNode, id: Str) -> Bool
 //     println("${list.len(svgdoc.walk(svgdoc.group([])))}")
 // ```
 pub fn walk(n: SvgNode) -> [SvgNode]
-    todo("svg-nv.svgdoc.walk")
+    var out: [SvgNode] = []
+    walk_into(out, n)
+    out
 
 // The same subtree with every transform composed down from the root and
 // every group's transform cleared.
@@ -582,7 +612,7 @@ pub fn walk(n: SvgNode) -> [SvgNode]
 //     println("${svgdoc.node_count(svgdoc.flatten_transforms(svgdoc.group([])))}")
 // ```
 pub fn flatten_transforms(n: SvgNode) -> SvgNode
-    todo("svg-nv.svgdoc.flatten_transforms")
+    flatten_under(n, geomxform.identity())
 
 // The smallest rectangle containing everything the subtree draws, in
 // the coordinate system the subtree's parent uses.
@@ -600,7 +630,7 @@ pub fn flatten_transforms(n: SvgNode) -> SvgNode
 //     println("${geomrect.is_empty(svgdoc.bounds(svgdoc.group([])))}")
 // ```
 pub fn bounds(n: SvgNode) -> GeomRectF
-    todo("svg-nv.svgdoc.bounds")
+    bounds_under(n, geomxform.identity())
 
 // The smallest rectangle containing everything a document draws.
 //
@@ -612,7 +642,10 @@ pub fn bounds(n: SvgNode) -> GeomRectF
 //     println("${geomrect.is_empty(svgdoc.document_bounds(svgdoc.document(10.0, 10.0, [])))}")
 // ```
 pub fn document_bounds(doc: SvgDocument) -> GeomRectF
-    todo("svg-nv.svgdoc.document_bounds")
+    var box = geomrect.empty()
+    for k in doc.children
+        box = union_of(box, bounds(k))
+    box
 
 // How wide a text run is likely to be, from its length and its font
 // size alone.
@@ -636,7 +669,7 @@ pub fn document_bounds(doc: SvgDocument) -> GeomRectF
 //     println("${svgdoc.text_advance_estimate("hello", 16.0)}")
 // ```
 pub fn text_advance_estimate(content: Str, font_size: Float) -> Float
-    todo("svg-nv.svgdoc.text_advance_estimate")
+    code_points(content) as Float * font_size * advance_per_em()
 
 // The whole subtree as one path, with every shape converted and every
 // transform applied.
@@ -655,4 +688,101 @@ pub fn text_advance_estimate(content: Str, font_size: Float) -> Float
 //     println("${svgpath.command_count(svgdoc.to_path(svgdoc.group([])))}")
 // ```
 pub fn to_path(n: SvgNode) -> SvgPath
-    todo("svg-nv.svgdoc.to_path")
+    var cs: [SvgPathCmd] = []
+    path_into(cs, n, geomxform.identity())
+    svgpath.of_commands(cs)
+
+fn node(shape: SvgShape, style: SvgStyle, children: [SvgNode]) -> SvgNode
+    SvgNode { shape: shape, style: style, transform: no_transform(), id: "", children: children }
+
+// Appends the subtree to `out`, parents before children.
+fn walk_into(var out: [SvgNode], n: SvgNode)
+    list.push(out, n)
+    for k in n.children
+        walk_into(out, k)
+
+// The subtree with `outer`, the transform its ancestors compose to,
+// composed into every node.  A group keeps no transform of its own.
+fn flatten_under(n: SvgNode, outer: GeomXform) -> SvgNode
+    let total = geomxform.compose(to_xform(n.transform), outer)
+    var kids: [SvgNode] = []
+    for k in n.children
+        list.push(kids, flatten_under(k, total))
+    let own = if is_leaf(n)
+        total
+    else
+        geomxform.identity()
+    SvgNode { shape: n.shape, style: n.style, transform: of_xform(own), id: n.id, children: kids }
+
+// The union of two boxes, where a box of zero width or height still
+// holds the points on it.  `geomrect.union` treats such a box as
+// empty, which would drop a horizontal line from a bounding box.
+fn union_of(a: GeomRectF, b: GeomRectF) -> GeomRectF
+    if b.min.x > b.max.x or b.min.y > b.max.y
+        return a
+    geomrect.extend(geomrect.extend(a, b.min), b.max)
+
+// The subtree's box after its own transform and then `outer`.  Each
+// leaf's outline is transformed before its box is taken, so a rotated
+// curve gets a tight box rather than the box of a rotated box.
+fn bounds_under(n: SvgNode, outer: GeomXform) -> GeomRectF
+    let total = geomxform.compose(to_xform(n.transform), outer)
+    match n.shape
+        SvgGroupShape         =>
+            var box = geomrect.empty()
+            for k in n.children
+                box = union_of(box, bounds_under(k, total))
+            box
+        SvgTextShape(s, x, y) =>
+            svgpath.bounds(svgpath.transform(text_box(s, x, y, n.style), total))
+        _                     => svgpath.bounds(svgpath.transform(outline(n.shape), total))
+
+// The average advance of a proportional Latin face, as a fraction of
+// the font size.
+fn advance_per_em() -> Float
+    0.55
+
+// How many code points a string holds: its bytes, less the UTF-8
+// continuation bytes.
+fn code_points(s: Str) -> Int
+    var n = 0
+    for i in 0..str.len(s)
+        let b = str.byte_at_or(s, i, 0)
+        if b < 128 or b >= 192
+            n = n + 1
+    n
+
+// The estimated box of a text run as a closed path.  The run is
+// `text_advance_estimate` wide, placed by its anchor, and one font
+// size tall with four fifths of it above the baseline.
+fn text_box(s: Str, x: Float, y: Float, style: SvgStyle) -> SvgPath
+    let w = text_advance_estimate(s, style.font.size)
+    let left = match style.text_anchor
+        SvgAnchorStart  => x
+        SvgAnchorMiddle => x - w / 2.0
+        SvgAnchorEnd    => x - w
+    let top = y - 0.8 * style.font.size
+    svgpath.of_rect(geomrect.of_xywh(left, top, w, style.font.size), 0.0, 0.0)
+
+// A shape's outline as a path.  A group has none, and text has none
+// that can be drawn without a font.
+fn outline(s: SvgShape) -> SvgPath
+    match s
+        SvgRectShape(x, y, w, h, rx, ry) => svgpath.of_rect(geomrect.of_xywh(x, y, w, h), rx, ry)
+        SvgCircleShape(cx, cy, r)        => svgpath.of_ellipse(geompoint.ptf(cx, cy), r, r)
+        SvgEllipseShape(cx, cy, rx, ry)  => svgpath.of_ellipse(geompoint.ptf(cx, cy), rx, ry)
+        SvgLineShape(x1, y1, x2, y2)     =>
+            svgpath.line_to(svgpath.move_to(svgpath.empty(), x1, y1), x2, y2)
+        SvgPolylineShape(ps)             => svgpath.of_points(ps, false)
+        SvgPolygonShape(ps)              => svgpath.of_points(ps, true)
+        SvgPathShape(p)                  => p
+        SvgGroupShape                    => svgpath.empty()
+        SvgTextShape(_, _, _)            => svgpath.empty()
+
+// Appends the subtree's outlines, through its transforms, to `out`.
+fn path_into(var out: [SvgPathCmd], n: SvgNode, outer: GeomXform)
+    let total = geomxform.compose(to_xform(n.transform), outer)
+    list.append(out, svgpath.commands_of(svgpath.transform(outline(n.shape), total)))
+    if not is_leaf(n)
+        for k in n.children
+            path_into(out, k, total)

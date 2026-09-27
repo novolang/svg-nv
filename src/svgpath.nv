@@ -33,6 +33,8 @@
 
 use geompoint
 use geomrect
+use geomxform
+use svgnum
 
 // One step of a path, in absolute coordinates.
 //
@@ -95,7 +97,7 @@ pub struct SvgPath
 //     println("${svgpath.command_count(svgpath.empty())}")
 // ```
 pub fn empty() -> SvgPath
-    todo("svg-nv.svgpath.empty")
+    SvgPath { commands: [] }
 
 // A path from a command list, as given.
 //
@@ -106,7 +108,7 @@ pub fn empty() -> SvgPath
 //     println("${svgpath.command_count(svgpath.of_commands([SvgMoveTo(0.0, 0.0)]))}")
 // ```
 pub fn of_commands(commands: [SvgPathCmd]) -> SvgPath
-    todo("svg-nv.svgpath.of_commands")
+    SvgPath { commands: list.clone(commands) }
 
 // The path with one more command on the end.
 //
@@ -119,7 +121,9 @@ pub fn of_commands(commands: [SvgPathCmd]) -> SvgPath
 //     println("${svgpath.command_count(svgpath.push(svgpath.empty(), SvgClosePath))}")
 // ```
 pub fn push(p: SvgPath, c: SvgPathCmd) -> SvgPath
-    todo("svg-nv.svgpath.push")
+    var cs = list.clone(p.commands)
+    list.push(cs, c)
+    SvgPath { commands: cs }
 
 // The path with a `SvgMoveTo` on the end.
 //
@@ -130,7 +134,7 @@ pub fn push(p: SvgPath, c: SvgPathCmd) -> SvgPath
 //     println("${svgpath.command_count(svgpath.move_to(svgpath.empty(), 0.0, 0.0))}")
 // ```
 pub fn move_to(p: SvgPath, x: Float, y: Float) -> SvgPath
-    todo("svg-nv.svgpath.move_to")
+    push(p, SvgMoveTo(x, y))
 
 // The path with a `SvgLineTo` on the end.
 //
@@ -142,7 +146,7 @@ pub fn move_to(p: SvgPath, x: Float, y: Float) -> SvgPath
 //     println("${svgpath.command_count(p)}")
 // ```
 pub fn line_to(p: SvgPath, x: Float, y: Float) -> SvgPath
-    todo("svg-nv.svgpath.line_to")
+    push(p, SvgLineTo(x, y))
 
 // The path with a `SvgCubicTo` on the end.
 //
@@ -155,7 +159,7 @@ pub fn line_to(p: SvgPath, x: Float, y: Float) -> SvgPath
 // ```
 pub fn cubic_to(p: SvgPath, x1: Float, y1: Float, x2: Float, y2: Float, x: Float,
                 y: Float) -> SvgPath
-    todo("svg-nv.svgpath.cubic_to")
+    push(p, SvgCubicTo(x1, y1, x2, y2, x, y))
 
 // The path with a `SvgQuadTo` on the end.
 //
@@ -166,7 +170,7 @@ pub fn cubic_to(p: SvgPath, x1: Float, y1: Float, x2: Float, y2: Float, x: Float
 //     println("${svgpath.command_count(svgpath.quad_to(svgpath.empty(), 0.0, 1.0, 1.0, 0.0))}")
 // ```
 pub fn quad_to(p: SvgPath, x1: Float, y1: Float, x: Float, y: Float) -> SvgPath
-    todo("svg-nv.svgpath.quad_to")
+    push(p, SvgQuadTo(x1, y1, x, y))
 
 // The path with a `SvgArcTo` on the end.  `rotation` is in radians.
 //
@@ -179,7 +183,7 @@ pub fn quad_to(p: SvgPath, x1: Float, y1: Float, x: Float, y: Float) -> SvgPath
 // ```
 pub fn arc_to(p: SvgPath, rx: Float, ry: Float, rotation: Float, large_arc: Bool, sweep: Bool,
               x: Float, y: Float) -> SvgPath
-    todo("svg-nv.svgpath.arc_to")
+    push(p, SvgArcTo(rx, ry, rotation, large_arc, sweep, x, y))
 
 // The path with a `SvgClosePath` on the end.
 //
@@ -190,7 +194,7 @@ pub fn arc_to(p: SvgPath, rx: Float, ry: Float, rotation: Float, large_arc: Bool
 //     println("${svgpath.command_count(svgpath.close(svgpath.empty()))}")
 // ```
 pub fn close(p: SvgPath) -> SvgPath
-    todo("svg-nv.svgpath.close")
+    push(p, SvgClosePath)
 
 // A path tracing a rectangle, optionally with rounded corners.
 //
@@ -207,7 +211,26 @@ pub fn close(p: SvgPath) -> SvgPath
 //     println("${svgpath.command_count(p)}")
 // ```
 pub fn of_rect(r: GeomRectF, rx: Float, ry: Float) -> SvgPath
-    todo("svg-nv.svgpath.of_rect")
+    let x0 = r.min.x
+    let y0 = r.min.y
+    let x1 = r.max.x
+    let y1 = r.max.y
+    if rx <= 0.0 or ry <= 0.0
+        return SvgPath { commands: [SvgMoveTo(x0, y0), SvgLineTo(x1, y0), SvgLineTo(x1, y1),
+                                    SvgLineTo(x0, y1), SvgLineTo(x0, y0), SvgClosePath] }
+    let ax = math.min(rx, math.abs(x1 - x0) / 2.0)
+    let ay = math.min(ry, math.abs(y1 - y0) / 2.0)
+    SvgPath { commands: [
+        SvgMoveTo(x0 + ax, y0),
+        SvgLineTo(x1 - ax, y0),
+        SvgArcTo(ax, ay, 0.0, false, true, x1, y0 + ay),
+        SvgLineTo(x1, y1 - ay),
+        SvgArcTo(ax, ay, 0.0, false, true, x1 - ax, y1),
+        SvgLineTo(x0 + ax, y1),
+        SvgArcTo(ax, ay, 0.0, false, true, x0, y1 - ay),
+        SvgLineTo(x0, y0 + ay),
+        SvgArcTo(ax, ay, 0.0, false, true, x0 + ax, y0),
+        SvgClosePath] }
 
 // A path tracing an ellipse, as four arcs.
 //
@@ -219,7 +242,15 @@ pub fn of_rect(r: GeomRectF, rx: Float, ry: Float) -> SvgPath
 //     println("${svgpath.command_count(svgpath.of_ellipse(geompoint.origin(), 5.0, 3.0))}")
 // ```
 pub fn of_ellipse(center: GeomPointF, rx: Float, ry: Float) -> SvgPath
-    todo("svg-nv.svgpath.of_ellipse")
+    let cx = center.x
+    let cy = center.y
+    SvgPath { commands: [
+        SvgMoveTo(cx + rx, cy),
+        SvgArcTo(rx, ry, 0.0, false, true, cx, cy + ry),
+        SvgArcTo(rx, ry, 0.0, false, true, cx - rx, cy),
+        SvgArcTo(rx, ry, 0.0, false, true, cx, cy - ry),
+        SvgArcTo(rx, ry, 0.0, false, true, cx + rx, cy),
+        SvgClosePath] }
 
 // A path tracing a list of points: one move and then lines.
 //
@@ -235,7 +266,17 @@ pub fn of_ellipse(center: GeomPointF, rx: Float, ry: Float) -> SvgPath
 //     println("${svgpath.command_count(svgpath.of_points(ps, false))}")
 // ```
 pub fn of_points(points: [GeomPointF], closed: Bool) -> SvgPath
-    todo("svg-nv.svgpath.of_points")
+    var cs: [SvgPathCmd] = []
+    var first = true
+    for q in points
+        if first
+            list.push(cs, SvgMoveTo(q.x, q.y))
+            first = false
+        else
+            list.push(cs, SvgLineTo(q.x, q.y))
+    if closed and not first
+        list.push(cs, SvgClosePath)
+    SvgPath { commands: cs }
 
 // How many commands the path has.
 //
@@ -246,7 +287,7 @@ pub fn of_points(points: [GeomPointF], closed: Bool) -> SvgPath
 //     println("${svgpath.command_count(svgpath.empty())}")
 // ```
 pub fn command_count(p: SvgPath) -> Int
-    todo("svg-nv.svgpath.command_count")
+    list.len(p.commands)
 
 // The commands, in order.
 //
@@ -258,7 +299,7 @@ pub fn command_count(p: SvgPath) -> Int
 //     println("${list.len(svgpath.commands_of(svgpath.empty()))}")
 // ```
 pub fn commands_of(p: SvgPath) -> [SvgPathCmd]
-    todo("svg-nv.svgpath.commands_of")
+    list.clone(p.commands)
 
 // How many subpaths the path has — one per `SvgMoveTo`.
 //
@@ -269,7 +310,14 @@ pub fn commands_of(p: SvgPath) -> [SvgPathCmd]
 //     println("${svgpath.subpath_count(svgpath.empty())}")
 // ```
 pub fn subpath_count(p: SvgPath) -> Int
-    todo("svg-nv.svgpath.subpath_count")
+    var n = 0
+    for c in p.commands
+        match c
+            SvgMoveTo(_, _) =>
+                n = n + 1
+            _               =>
+                n = n
+    n
 
 // Whether the path starts with a `SvgMoveTo`, which is what SVG
 // requires for it to draw anything.
@@ -281,7 +329,9 @@ pub fn subpath_count(p: SvgPath) -> Int
 //     println("${svgpath.is_well_formed(svgpath.empty())}")
 // ```
 pub fn is_well_formed(p: SvgPath) -> Bool
-    todo("svg-nv.svgpath.is_well_formed")
+    match list.first(p.commands)
+        Some(SvgMoveTo(_, _)) => true
+        _                     => false
 
 // Where the pen is after the last command, or the ORIGIN for an empty
 // path.
@@ -293,7 +343,10 @@ pub fn is_well_formed(p: SvgPath) -> Bool
 //     println("${svgpath.current_point(svgpath.empty()).x}")
 // ```
 pub fn current_point(p: SvgPath) -> GeomPointF
-    todo("svg-nv.svgpath.current_point")
+    var pen = Pen { cur: geompoint.origin(), start: geompoint.origin() }
+    for c in p.commands
+        pen = advance(pen, c)
+    pen.cur
 
 // The smallest rectangle containing every point the path passes
 // through.
@@ -313,7 +366,12 @@ pub fn current_point(p: SvgPath) -> GeomPointF
 //     println("${geomrect.is_empty(svgpath.bounds(svgpath.empty()))}")
 // ```
 pub fn bounds(p: SvgPath) -> GeomRectF
-    todo("svg-nv.svgpath.bounds")
+    var box = geomrect.empty()
+    var pen = Pen { cur: geompoint.origin(), start: geompoint.origin() }
+    for c in p.commands
+        box = extend_by(box, pen.cur, c)
+        pen = advance(pen, c)
+    box
 
 // One run of the pen: the points between a `SvgMoveTo` and whatever
 // ended it.
@@ -356,7 +414,42 @@ pub struct SvgSubpath
 //     println("${list.len(svgpath.flatten(svgpath.empty(), 0.1))}")
 // ```
 pub fn flatten(p: SvgPath, tolerance: Float) -> [SvgSubpath]
-    todo("svg-nv.svgpath.flatten")
+    var runs: [SvgSubpath] = []
+    var pts: [GeomPointF] = []
+    var drew = false
+    var started = false
+    var pen = Pen { cur: geompoint.origin(), start: geompoint.origin() }
+    for c in p.commands
+        let from = pen.cur
+        pen = advance(pen, c)
+        match c
+            SvgMoveTo(x, y)                           =>
+                if drew
+                    list.push(runs, SvgSubpath { points: pts, closed: false })
+                pts = [geompoint.ptf(x, y)]
+                drew = false
+                started = true
+            SvgClosePath                              =>
+                if drew
+                    list.push(runs, SvgSubpath { points: without_repeated_start(pts),
+                                                 closed: true })
+                pts = [pen.start]
+                drew = false
+            SvgLineTo(x, y)                           =>
+                list.push(pts, geompoint.ptf(x, y))
+                drew = started
+            SvgQuadTo(x1, y1, x, y)                   =>
+                quad_points(pts, from, x1, y1, x, y, tolerance)
+                drew = started
+            SvgCubicTo(x1, y1, x2, y2, x, y)          =>
+                cubic_points(pts, from, x1, y1, x2, y2, x, y, tolerance)
+                drew = started
+            SvgArcTo(rx, ry, rot, large, sweep, x, y) =>
+                arc_points(pts, from, rx, ry, rot, large, sweep, x, y, tolerance)
+                drew = started
+    if drew
+        list.push(runs, SvgSubpath { points: pts, closed: false })
+    runs
 
 // The same path with every arc replaced by cubics.
 //
@@ -373,7 +466,15 @@ pub fn flatten(p: SvgPath, tolerance: Float) -> [SvgSubpath]
 //     println("${svgpath.command_count(svgpath.to_cubics(svgpath.empty()))}")
 // ```
 pub fn to_cubics(p: SvgPath) -> SvgPath
-    todo("svg-nv.svgpath.to_cubics")
+    var cs: [SvgPathCmd] = []
+    var pen = Pen { cur: geompoint.origin(), start: geompoint.origin() }
+    for c in p.commands
+        match c
+            SvgArcTo(rx, ry, rot, large, sweep, x, y) =>
+                list.append(cs, arc_as_cubics(pen.cur, rx, ry, rot, large, sweep, x, y))
+            _                                         => list.push(cs, c)
+        pen = advance(pen, c)
+    SvgPath { commands: cs }
 
 // The same path with every quadratic raised to a cubic.
 //
@@ -387,7 +488,19 @@ pub fn to_cubics(p: SvgPath) -> SvgPath
 //     println("${svgpath.command_count(svgpath.quads_to_cubics(svgpath.empty()))}")
 // ```
 pub fn quads_to_cubics(p: SvgPath) -> SvgPath
-    todo("svg-nv.svgpath.quads_to_cubics")
+    var cs: [SvgPathCmd] = []
+    var pen = Pen { cur: geompoint.origin(), start: geompoint.origin() }
+    for c in p.commands
+        match c
+            SvgQuadTo(x1, y1, x, y) =>
+                let c1x = pen.cur.x + 2.0 / 3.0 * (x1 - pen.cur.x)
+                let c1y = pen.cur.y + 2.0 / 3.0 * (y1 - pen.cur.y)
+                let c2x = x + 2.0 / 3.0 * (x1 - x)
+                let c2y = y + 2.0 / 3.0 * (y1 - y)
+                list.push(cs, SvgCubicTo(c1x, c1y, c2x, c2y, x, y))
+            _                       => list.push(cs, c)
+        pen = advance(pen, c)
+    SvgPath { commands: cs }
 
 // Every command's coordinates through an affine transform.
 //
@@ -404,7 +517,10 @@ pub fn quads_to_cubics(p: SvgPath) -> SvgPath
 //     println("${svgpath.command_count(svgpath.transform(svgpath.empty(), geomxform.identity()))}")
 // ```
 pub fn transform(p: SvgPath, t: GeomXform) -> SvgPath
-    todo("svg-nv.svgpath.transform")
+    var cs: [SvgPathCmd] = []
+    for c in p.commands
+        list.push(cs, transform_command(c, t))
+    SvgPath { commands: cs }
 
 // How long the path is, measured at `tolerance`.
 //
@@ -415,7 +531,10 @@ pub fn transform(p: SvgPath, t: GeomXform) -> SvgPath
 //     println("${svgpath.length(svgpath.empty(), 0.1)}")
 // ```
 pub fn length(p: SvgPath, tolerance: Float) -> Float
-    todo("svg-nv.svgpath.length")
+    var total = 0.0
+    for run in flatten(p, tolerance)
+        total = total + run_length(run)
+    total
 
 // The path as an SVG `d` attribute, absolute commands throughout.
 //
@@ -429,7 +548,10 @@ pub fn length(p: SvgPath, tolerance: Float) -> Float
 //     println(svgpath.to_string(svgpath.empty(), 3))
 // ```
 pub fn to_string(p: SvgPath, decimals: Int) -> Str
-    todo("svg-nv.svgpath.to_string")
+    var out = ""
+    for c in p.commands
+        out = out + spelled(c, decimals)
+    out
 
 // The path as a `d` attribute, choosing whichever of the absolute,
 // relative and shorthand spellings is shortest per command.
@@ -445,4 +567,574 @@ pub fn to_string(p: SvgPath, decimals: Int) -> Str
 //     println(svgpath.to_string_compact(svgpath.empty(), 3))
 // ```
 pub fn to_string_compact(p: SvgPath, decimals: Int) -> Str
-    todo("svg-nv.svgpath.to_string_compact")
+    var w = Compact { out: "", last: "", letter: "", cur: geompoint.origin(),
+                      start: geompoint.origin(), ctrl: geompoint.origin(), kind: 0,
+                      decimals: decimals }
+    for c in p.commands
+        w = compact_step(w, c)
+    w.out
+
+// Where the pen is, and where the subpath it is drawing started.  A
+// `SvgClosePath` returns the pen to `start`.
+@value
+struct Pen
+    cur: GeomPointF
+    start: GeomPointF
+
+// The pen after one command.
+fn advance(pen: Pen, c: SvgPathCmd) -> Pen
+    match c
+        SvgMoveTo(x, y)               =>
+            let q = geompoint.ptf(x, y)
+            Pen { cur: q, start: q }
+        SvgLineTo(x, y)               => Pen { cur: geompoint.ptf(x, y), start: pen.start }
+        SvgCubicTo(_, _, _, _, x, y)  => Pen { cur: geompoint.ptf(x, y), start: pen.start }
+        SvgQuadTo(_, _, x, y)         => Pen { cur: geompoint.ptf(x, y), start: pen.start }
+        SvgArcTo(_, _, _, _, _, x, y) => Pen { cur: geompoint.ptf(x, y), start: pen.start }
+        SvgClosePath                  => Pen { cur: pen.start, start: pen.start }
+
+// Whether two points are the same point, coordinate by coordinate.
+fn same_point(a: GeomPointF, b: GeomPointF) -> Bool
+    a.x == b.x and a.y == b.y
+
+// An elliptical arc in SVG's centre parameterisation (SVG 1.1 appendix
+// F.6.5): the centre, the radii after the out-of-range correction of
+// F.6.6, the axis angle as its cosine and sine, the start angle and the
+// signed sweep.  `valid` is false when the arc is not an ellipse at
+// all: when its endpoints coincide, which omits it, or when a radius is
+// zero, which makes it a straight line.
+@value
+struct ArcGeom
+    cx: Float
+    cy: Float
+    rx: Float
+    ry: Float
+    cosp: Float
+    sinp: Float
+    theta: Float
+    delta: Float
+    valid: Bool
+
+fn two_pi() -> Float
+    2.0 * math.pi()
+
+// The centre parameterisation of the arc from `from` to `to`.
+fn arc_geom(from: GeomPointF, rx0: Float, ry0: Float, rot: Float, large: Bool, sweep: Bool,
+            to: GeomPointF) -> ArcGeom
+    let cosp = math.cos(rot)
+    let sinp = math.sin(rot)
+    var rx = math.abs(rx0)
+    var ry = math.abs(ry0)
+    if same_point(from, to) or rx == 0.0 or ry == 0.0
+        return ArcGeom { cx: 0.0, cy: 0.0, rx: rx, ry: ry, cosp: cosp, sinp: sinp,
+                         theta: 0.0, delta: 0.0, valid: false }
+    let dx2 = (from.x - to.x) / 2.0
+    let dy2 = (from.y - to.y) / 2.0
+    let x1p = cosp * dx2 + sinp * dy2
+    let y1p = cosp * dy2 - sinp * dx2
+    let lam = x1p * x1p / (rx * rx) + y1p * y1p / (ry * ry)
+    if lam > 1.0
+        let s = math.sqrt(lam)
+        rx = rx * s
+        ry = ry * s
+    let num = rx * rx * ry * ry - rx * rx * y1p * y1p - ry * ry * x1p * x1p
+    let den = rx * rx * y1p * y1p + ry * ry * x1p * x1p
+    var coef = math.sqrt(math.max(0.0, num / den))
+    if large == sweep
+        coef = 0.0 - coef
+    let cxp = coef * rx * y1p / ry
+    let cyp = 0.0 - coef * ry * x1p / rx
+    let cx = cosp * cxp - sinp * cyp + (from.x + to.x) / 2.0
+    let cy = sinp * cxp + cosp * cyp + (from.y + to.y) / 2.0
+    let ux = (x1p - cxp) / rx
+    let uy = (y1p - cyp) / ry
+    let vx = (0.0 - x1p - cxp) / rx
+    let vy = (0.0 - y1p - cyp) / ry
+    let theta = math.atan2(uy, ux)
+    var delta = math.atan2(ux * vy - uy * vx, ux * vx + uy * vy)
+    if not sweep and delta > 0.0
+        delta = delta - two_pi()
+    if sweep and delta < 0.0
+        delta = delta + two_pi()
+    ArcGeom { cx: cx, cy: cy, rx: rx, ry: ry, cosp: cosp, sinp: sinp, theta: theta,
+              delta: delta, valid: true }
+
+// The point of the arc's ellipse at parameter angle `t`.
+fn arc_point(g: ArcGeom, t: Float) -> GeomPointF
+    let ct = math.cos(t)
+    let st = math.sin(t)
+    geompoint.ptf(g.cx + g.rx * ct * g.cosp - g.ry * st * g.sinp,
+                  g.cy + g.rx * ct * g.sinp + g.ry * st * g.cosp)
+
+// The derivative of `arc_point` with respect to `t`.
+fn arc_tangent(g: ArcGeom, t: Float) -> GeomVecF
+    let ct = math.cos(t)
+    let st = math.sin(t)
+    geompoint.vecf(0.0 - g.rx * st * g.cosp - g.ry * ct * g.sinp,
+                   g.ry * ct * g.cosp - g.rx * st * g.sinp)
+
+// Whether parameter angle `a` lies on the swept part of the arc.
+fn angle_in_sweep(a: Float, theta: Float, delta: Float) -> Bool
+    var d = if delta >= 0.0
+        a - theta
+    else
+        theta - a
+    d = d - two_pi() * math.floor(d / two_pi())
+    d <= math.abs(delta)
+
+// The arc as cubics, one per quarter turn or part of one.  The control
+// points are the standard `4/3 tan(step/4)` construction, whose radial
+// error is below 0.03% of the radius for a quarter turn.
+fn arc_as_cubics(from: GeomPointF, rx: Float, ry: Float, rot: Float, large: Bool, sweep: Bool,
+                 x: Float, y: Float) -> [SvgPathCmd]
+    let to = geompoint.ptf(x, y)
+    let g = arc_geom(from, rx, ry, rot, large, sweep, to)
+    if not g.valid
+        if same_point(from, to)
+            return []
+        return [SvgLineTo(x, y)]
+    let n = math.max(1, math.ceil(math.abs(g.delta) / (math.pi() / 2.0) - 0.000000001) as Int)
+    let step = g.delta / n as Float
+    let k = 4.0 / 3.0 * math.tan(step / 4.0)
+    var out: [SvgPathCmd] = []
+    for i in 0..n
+        let t1 = g.theta + step * i as Float
+        let t2 = t1 + step
+        let p1 = if i == 0
+            from
+        else
+            arc_point(g, t1)
+        let p2 = if i == n - 1
+            to
+        else
+            arc_point(g, t2)
+        let d1 = arc_tangent(g, t1)
+        let d2 = arc_tangent(g, t2)
+        list.push(out, SvgCubicTo(p1.x + k * d1.dx, p1.y + k * d1.dy, p2.x - k * d2.dx,
+                                  p2.y - k * d2.dy, p2.x, p2.y))
+    out
+
+// The parameter values in `(0, 1)` where the cubic Bezier over the four
+// coordinates has a zero derivative: the roots of
+// `a t^2 + b t + c`, the derivative divided by three.
+fn cubic_turns(p0: Float, p1: Float, p2: Float, p3: Float) -> [Float]
+    let a = 3.0 * p1 - p0 - 3.0 * p2 + p3
+    let b = 2.0 * (p0 - 2.0 * p1 + p2)
+    let c = p1 - p0
+    var roots: [Float] = []
+    if math.abs(a) < 0.000000000001
+        if b != 0.0
+            list.push(roots, 0.0 - c / b)
+    else
+        let disc = b * b - 4.0 * a * c
+        if disc >= 0.0
+            let s = math.sqrt(disc)
+            list.push(roots, (0.0 - b + s) / (2.0 * a))
+            list.push(roots, (0.0 - b - s) / (2.0 * a))
+    list.filter(roots, t => t > 0.0 and t < 1.0)
+
+// One coordinate of the cubic Bezier at `t`.
+fn cubic_at(p0: Float, p1: Float, p2: Float, p3: Float, t: Float) -> Float
+    let m = 1.0 - t
+    m * m * m * p0 + 3.0 * m * m * t * p1 + 3.0 * m * t * t * p2 + t * t * t * p3
+
+// One coordinate of the quadratic Bezier at `t`.
+fn quad_at(p0: Float, p1: Float, p2: Float, t: Float) -> Float
+    let m = 1.0 - t
+    m * m * p0 + 2.0 * m * t * p1 + t * t * p2
+
+// The box grown by the cubic from `from`, at its endpoints and at every
+// turning point of either coordinate.
+fn cubic_box(box: GeomRectF, from: GeomPointF, x1: Float, y1: Float, x2: Float, y2: Float, x: Float,
+             y: Float) -> GeomRectF
+    var b = geomrect.extend(geomrect.extend(box, from), geompoint.ptf(x, y))
+    let ts = list.concat(cubic_turns(from.x, x1, x2, x), cubic_turns(from.y, y1, y2, y))
+    for t in ts
+        b = geomrect.extend(b, geompoint.ptf(cubic_at(from.x, x1, x2, x, t),
+                                             cubic_at(from.y, y1, y2, y, t)))
+    b
+
+// The parameter in `(0, 1)` where one coordinate of the quadratic turns,
+// or -1 when it does not turn inside the segment.
+fn quad_turn(p0: Float, p1: Float, p2: Float) -> Float
+    let den = p0 - 2.0 * p1 + p2
+    if den == 0.0
+        return 0.0 - 1.0
+    let t = (p0 - p1) / den
+    if t > 0.0 and t < 1.0
+        t
+    else
+        0.0 - 1.0
+
+// The box grown by the quadratic from `from`.
+fn quad_box(box: GeomRectF, from: GeomPointF, x1: Float, y1: Float, x: Float, y: Float) -> GeomRectF
+    var b = geomrect.extend(geomrect.extend(box, from), geompoint.ptf(x, y))
+    for t in [quad_turn(from.x, x1, x), quad_turn(from.y, y1, y)]
+        if t > 0.0
+            b = geomrect.extend(b, geompoint.ptf(quad_at(from.x, x1, x, t),
+                                                 quad_at(from.y, y1, y, t)))
+    b
+
+// The box grown by the arc from `from`, at its endpoints and at each of
+// the four axis extremes of its ellipse that the sweep passes.
+fn arc_box(box: GeomRectF, from: GeomPointF, rx: Float, ry: Float, rot: Float, large: Bool,
+           sweep: Bool, x: Float, y: Float) -> GeomRectF
+    let to = geompoint.ptf(x, y)
+    var b = geomrect.extend(geomrect.extend(box, from), to)
+    let g = arc_geom(from, rx, ry, rot, large, sweep, to)
+    if not g.valid
+        return b
+    let tx = math.atan2(0.0 - g.ry * g.sinp, g.rx * g.cosp)
+    let ty = math.atan2(g.ry * g.cosp, g.rx * g.sinp)
+    for a in [tx, tx + math.pi(), ty, ty + math.pi()]
+        if angle_in_sweep(a, g.theta, g.delta)
+            b = geomrect.extend(b, arc_point(g, a))
+    b
+
+// The box grown by one command drawn from `from`.  A move draws
+// nothing, and a close draws a line whose ends are already in the box.
+fn extend_by(box: GeomRectF, from: GeomPointF, c: SvgPathCmd) -> GeomRectF
+    match c
+        SvgMoveTo(_, _)                           => box
+        SvgLineTo(x, y)                           =>
+            geomrect.extend(geomrect.extend(box, from), geompoint.ptf(x, y))
+        SvgCubicTo(x1, y1, x2, y2, x, y)          => cubic_box(box, from, x1, y1, x2, y2, x, y)
+        SvgQuadTo(x1, y1, x, y)                   => quad_box(box, from, x1, y1, x, y)
+        SvgArcTo(rx, ry, rot, large, sweep, x, y) =>
+            arc_box(box, from, rx, ry, rot, large, sweep, x, y)
+        SvgClosePath                              => box
+
+// How many straight pieces a curve needs, from the fractional count a
+// tolerance asks for.  A tolerance of zero or less asks for infinitely
+// many, and the count stops at 4096.
+fn piece_count(estimate: Float) -> Int
+    if math.is_nan(estimate) or estimate > 4096.0
+        return 4096
+    math.max(1, math.ceil(estimate) as Int)
+
+// Appends the quadratic's points after `from`, within `tol`.  A piece
+// of parameter width `h` strays at most `M h^2 / 8` from the curve,
+// where `M` bounds the second derivative.
+fn quad_points(var pts: [GeomPointF], from: GeomPointF, x1: Float, y1: Float, x: Float, y: Float,
+               tol: Float)
+    let dd = math.hypot(from.x - 2.0 * x1 + x, from.y - 2.0 * y1 + y)
+    let n = piece_count(math.sqrt(dd / (4.0 * tol)))
+    for i in 1..n
+        let t = i as Float / n as Float
+        list.push(pts, geompoint.ptf(quad_at(from.x, x1, x, t), quad_at(from.y, y1, y, t)))
+    list.push(pts, geompoint.ptf(x, y))
+
+// Appends the cubic's points after `from`, within `tol`.
+fn cubic_points(var pts: [GeomPointF], from: GeomPointF, x1: Float, y1: Float, x2: Float, y2: Float,
+                x: Float, y: Float, tol: Float)
+    let d1 = math.hypot(from.x - 2.0 * x1 + x2, from.y - 2.0 * y1 + y2)
+    let d2 = math.hypot(x1 - 2.0 * x2 + x, y1 - 2.0 * y2 + y)
+    let n = piece_count(math.sqrt(3.0 * math.max(d1, d2) / (4.0 * tol)))
+    for i in 1..n
+        let t = i as Float / n as Float
+        list.push(pts, geompoint.ptf(cubic_at(from.x, x1, x2, x, t),
+                                     cubic_at(from.y, y1, y2, y, t)))
+    list.push(pts, geompoint.ptf(x, y))
+
+// Appends the arc's points after `from`, within `tol`.  A chord across
+// an angle `s` of a circle of radius `r` strays `r (1 - cos(s / 2))`
+// from it, and the larger radius bounds the ellipse.
+fn arc_points(var pts: [GeomPointF], from: GeomPointF, rx: Float, ry: Float, rot: Float,
+              large: Bool, sweep: Bool, x: Float, y: Float, tol: Float)
+    let to = geompoint.ptf(x, y)
+    let g = arc_geom(from, rx, ry, rot, large, sweep, to)
+    if g.valid
+        let r = math.max(g.rx, g.ry)
+        let s = 2.0 * math.acos(math.max(0.0 - 1.0, 1.0 - tol / r))
+        let n = piece_count(math.abs(g.delta) / s)
+        for i in 1..n
+            list.push(pts, arc_point(g, g.theta + g.delta * i as Float / n as Float))
+    list.push(pts, to)
+
+// The run's points without the last one when it repeats the first.
+fn without_repeated_start(pts: [GeomPointF]) -> [GeomPointF]
+    let n = pts.len()
+    if n < 2 or not same_point(pts[0], pts[n - 1])
+        return pts[:]
+    var out: [GeomPointF] = []
+    for i in 0..n - 1
+        list.push(out, pts[i])
+    out
+
+// The length of one flattened run, its closing segment included.
+fn run_length(run: SvgSubpath) -> Float
+    let n = run.points.len()
+    var total = 0.0
+    for i in 1..n
+        total = total + distance(run.points[i - 1], run.points[i])
+    if run.closed and n > 1
+        total = total + distance(run.points[n - 1], run.points[0])
+    total
+
+fn distance(a: GeomPointF, b: GeomPointF) -> Float
+    math.hypot(b.x - a.x, b.y - a.y)
+
+// One command through `t`.  A move, a line and the Bezier curves map
+// point by point.  An arc maps its endpoint, and its ellipse is the
+// image of the old one: `transform_arc` works out the new radii and
+// axis angle, and a transform that mirrors reverses the sweep.
+fn transform_command(c: SvgPathCmd, t: GeomXform) -> SvgPathCmd
+    match c
+        SvgMoveTo(x, y)                           =>
+            let q = geomxform.apply_point(t, geompoint.ptf(x, y))
+            SvgMoveTo(q.x, q.y)
+        SvgLineTo(x, y)                           =>
+            let q = geomxform.apply_point(t, geompoint.ptf(x, y))
+            SvgLineTo(q.x, q.y)
+        SvgCubicTo(x1, y1, x2, y2, x, y)          =>
+            let a = geomxform.apply_point(t, geompoint.ptf(x1, y1))
+            let b = geomxform.apply_point(t, geompoint.ptf(x2, y2))
+            let q = geomxform.apply_point(t, geompoint.ptf(x, y))
+            SvgCubicTo(a.x, a.y, b.x, b.y, q.x, q.y)
+        SvgQuadTo(x1, y1, x, y)                   =>
+            let a = geomxform.apply_point(t, geompoint.ptf(x1, y1))
+            let q = geomxform.apply_point(t, geompoint.ptf(x, y))
+            SvgQuadTo(a.x, a.y, q.x, q.y)
+        SvgArcTo(rx, ry, rot, large, sweep, x, y) => transform_arc(rx, ry, rot, large, sweep, x, y, t)
+        SvgClosePath                              => SvgClosePath
+
+// An arc through `t`.  The ellipse is the image of the unit circle
+// under `A = L R(rot) diag(rx, ry)`, where `L` is the linear part of
+// `t`, and the new radii and axis are the square roots of the
+// eigenvalues of `A A^T` and the direction of the larger one.
+fn transform_arc(rx: Float, ry: Float, rot: Float, large: Bool, sweep: Bool, x: Float, y: Float,
+                 t: GeomXform) -> SvgPathCmd
+    let q = geomxform.apply_point(t, geompoint.ptf(x, y))
+    if t.a == 1.0 and t.b == 0.0 and t.c == 0.0 and t.d == 1.0
+        return SvgArcTo(rx, ry, rot, large, sweep, q.x, q.y)
+    let cp = math.cos(rot)
+    let sp = math.sin(rot)
+    let m11 = t.a * rx * cp + t.c * rx * sp
+    let m21 = t.b * rx * cp + t.d * rx * sp
+    let m12 = t.c * ry * cp - t.a * ry * sp
+    let m22 = t.d * ry * cp - t.b * ry * sp
+    let sxx = m11 * m11 + m12 * m12
+    let sxy = m11 * m21 + m12 * m22
+    let syy = m21 * m21 + m22 * m22
+    let mid = (sxx + syy) / 2.0
+    let rad = math.hypot((sxx - syy) / 2.0, sxy)
+    let major = math.sqrt(mid + rad)
+    let minor = math.sqrt(math.max(0.0, mid - rad))
+    let angle = 0.5 * math.atan2(2.0 * sxy, sxx - syy)
+    let mirrored = t.a * t.d - t.b * t.c < 0.0
+    SvgArcTo(major, minor, angle, large, (if mirrored then not sweep else sweep), q.x, q.y)
+
+// Radians as the degrees an SVG attribute writes.
+fn degrees(radians: Float) -> Float
+    radians * 180.0 / math.pi()
+
+fn flag(b: Bool) -> Float
+    if b
+        1.0
+    else
+        0.0
+
+// Numbers separated by single spaces.
+fn spaced(vs: [Float], decimals: Int) -> Str
+    str.join(list.map(vs, v => svgnum.format(v, decimals)), " ")
+
+// One command in the absolute spelling `to_string` writes.
+fn spelled(c: SvgPathCmd, d: Int) -> Str
+    match c
+        SvgMoveTo(x, y)                           => "M" + spaced([x, y], d)
+        SvgLineTo(x, y)                           => "L" + spaced([x, y], d)
+        SvgCubicTo(x1, y1, x2, y2, x, y)          => "C" + spaced([x1, y1, x2, y2, x, y], d)
+        SvgQuadTo(x1, y1, x, y)                   => "Q" + spaced([x1, y1, x, y], d)
+        SvgArcTo(rx, ry, rot, large, sweep, x, y) =>
+            "A" + spaced([rx, ry, degrees(rot), flag(large), flag(sweep), x, y], d)
+        SvgClosePath                              => "Z"
+
+// The compact writer's state: the text so far, the last token written,
+// the command letter in force, and what a reader of that text knows:
+// where its pen is, where the subpath started, and the control point
+// an `S` or a `T` would reflect.  `kind` is 1 after a cubic, 2 after a
+// quadratic and 0 after anything else.
+struct Compact
+    out: Str
+    last: Str
+    letter: Str
+    cur: GeomPointF
+    start: GeomPointF
+    ctrl: GeomPointF
+    kind: Int
+    decimals: Int
+
+// One way of writing a command: its letter, its numbers, and where a
+// reader's pen and control point end up after reading it.
+struct Spelling
+    letter: Str
+    values: [Float]
+    end: GeomPointF
+    ctrl: GeomPointF
+
+// The value a reader gets back from `v` written at `d` decimals.
+fn decoded(v: Float, d: Int) -> Float
+    str.to_float(svgnum.format(v, d)) ?? v
+
+// Whether two coordinates are written the same at `d` decimals.
+fn same_written(a: Float, b: Float, d: Int) -> Bool
+    svgnum.format(a, d) == svgnum.format(b, d)
+
+// Whether a separator is needed between the token `prev` and the
+// number `s`.  A letter ends a token, a minus sign starts one, and a
+// second point starts a new number after a number that has one.
+fn needs_space(prev: Str, s: Str) -> Bool
+    let b = str.byte_at_or(prev, str.len(prev) - 1, 0)
+    if prev == "" or b >= 'A' and b <= 'Z' or b >= 'a' and b <= 'z'
+        return false
+    if str.starts_with(s, "-")
+        return false
+    not (str.starts_with(s, ".") and str.contains(prev, "."))
+
+// The text a spelling adds after the compact writer's state `w`.  The
+// letter is left out when it is the one already in force: a repeated
+// letter, or the line that SVG implies after a move.
+fn encoded(w: Compact, sp: Spelling) -> Str
+    let implied = if w.letter == "M"
+        "L"
+    else if w.letter == "m"
+        "l"
+    else
+        w.letter
+    var text = ""
+    var prev = w.last
+    if sp.letter != implied or list.len(sp.values) == 0
+        text = sp.letter
+        prev = sp.letter
+    for v in sp.values
+        let s = svgnum.format_short(v, w.decimals)
+        if needs_space(prev, s)
+            text = text + " "
+        text = text + s
+        prev = s
+    text
+
+// The last token of a spelling as written after `w`.
+fn last_token(w: Compact, sp: Spelling) -> Str
+    match list.last(sp.values)
+        Some(v) => svgnum.format_short(v, w.decimals)
+        None    => sp.letter
+
+// The spelling of `sps` that writes the fewest bytes after `w`; the
+// earliest of equal ones.
+fn shortest(w: Compact, sps: [Spelling]) -> Spelling
+    var best = sps[0]
+    var best_len = str.len(encoded(w, best))
+    for sp in sps
+        let n = str.len(encoded(w, sp))
+        if n < best_len
+            best = sp
+            best_len = n
+    best
+
+fn spelling(letter: Str, values: [Float], end: GeomPointF, ctrl: GeomPointF) -> Spelling
+    Spelling { letter: letter, values: values, end: end, ctrl: ctrl }
+
+// Where a reader's pen lands from an absolute and from a relative
+// coordinate pair.
+fn abs_end(x: Float, y: Float, d: Int) -> GeomPointF
+    geompoint.ptf(decoded(x, d), decoded(y, d))
+
+fn rel_end(cur: GeomPointF, x: Float, y: Float, d: Int) -> GeomPointF
+    geompoint.ptf(cur.x + decoded(x - cur.x, d), cur.y + decoded(y - cur.y, d))
+
+// The spellings of a line: `L`, `l`, and `H`, `h`, `V` or `v` when one
+// coordinate is written the same as the pen's.
+fn line_spellings(w: Compact, x: Float, y: Float) -> [Spelling]
+    let d = w.decimals
+    let c = w.cur
+    let ae = abs_end(x, y, d)
+    let re = rel_end(c, x, y, d)
+    var sps = [spelling("L", [x, y], ae, ae), spelling("l", [x - c.x, y - c.y], re, re)]
+    if same_written(y, c.y, d)
+        let h = geompoint.ptf(ae.x, c.y)
+        let hr = geompoint.ptf(re.x, c.y)
+        list.push(sps, spelling("H", [x], h, h))
+        list.push(sps, spelling("h", [x - c.x], hr, hr))
+    if same_written(x, c.x, d)
+        let v = geompoint.ptf(c.x, ae.y)
+        let vr = geompoint.ptf(c.x, re.y)
+        list.push(sps, spelling("V", [y], v, v))
+        list.push(sps, spelling("v", [y - c.y], vr, vr))
+    sps
+
+// The control point an `S` or a `T` implies: the reflection of the
+// previous control point of the same kind, or the pen itself.
+fn reflected(w: Compact, kind: Int) -> GeomPointF
+    if w.kind == kind
+        return geompoint.ptf(2.0 * w.cur.x - w.ctrl.x, 2.0 * w.cur.y - w.ctrl.y)
+    w.cur
+
+// The spellings of a cubic: `C`, `c`, and `S` or `s` when its first
+// control point is the one a reader would reflect.
+fn cubic_spellings(w: Compact, x1: Float, y1: Float, x2: Float, y2: Float, x: Float,
+                   y: Float) -> [Spelling]
+    let d = w.decimals
+    let c = w.cur
+    let ae = abs_end(x, y, d)
+    let re = rel_end(c, x, y, d)
+    let ac = abs_end(x2, y2, d)
+    let rc = rel_end(c, x2, y2, d)
+    var sps = [spelling("C", [x1, y1, x2, y2, x, y], ae, ac),
+               spelling("c", [x1 - c.x, y1 - c.y, x2 - c.x, y2 - c.y, x - c.x, y - c.y], re, rc)]
+    let r = reflected(w, 1)
+    if same_written(x1, r.x, d) and same_written(y1, r.y, d)
+        list.push(sps, spelling("S", [x2, y2, x, y], ae, ac))
+        list.push(sps, spelling("s", [x2 - c.x, y2 - c.y, x - c.x, y - c.y], re, rc))
+    sps
+
+// The spellings of a quadratic: `Q`, `q`, and `T` or `t` when its
+// control point is the one a reader would reflect.
+fn quad_spellings(w: Compact, x1: Float, y1: Float, x: Float, y: Float) -> [Spelling]
+    let d = w.decimals
+    let c = w.cur
+    let ae = abs_end(x, y, d)
+    let re = rel_end(c, x, y, d)
+    var sps = [spelling("Q", [x1, y1, x, y], ae, abs_end(x1, y1, d)),
+               spelling("q", [x1 - c.x, y1 - c.y, x - c.x, y - c.y], re, rel_end(c, x1, y1, d))]
+    let r = reflected(w, 2)
+    if same_written(x1, r.x, d) and same_written(y1, r.y, d)
+        list.push(sps, spelling("T", [x, y], ae, r))
+        list.push(sps, spelling("t", [x - c.x, y - c.y], re, r))
+    sps
+
+// Every spelling of one command after the compact writer's state `w`.
+fn spellings(w: Compact, c: SvgPathCmd) -> [Spelling]
+    let d = w.decimals
+    let cur = w.cur
+    match c
+        SvgMoveTo(x, y)                           =>
+            let ae = abs_end(x, y, d)
+            let re = rel_end(cur, x, y, d)
+            [spelling("M", [x, y], ae, ae), spelling("m", [x - cur.x, y - cur.y], re, re)]
+        SvgLineTo(x, y)                           => line_spellings(w, x, y)
+        SvgCubicTo(x1, y1, x2, y2, x, y)          => cubic_spellings(w, x1, y1, x2, y2, x, y)
+        SvgQuadTo(x1, y1, x, y)                   => quad_spellings(w, x1, y1, x, y)
+        SvgArcTo(rx, ry, rot, large, sweep, x, y) =>
+            let ae = abs_end(x, y, d)
+            let re = rel_end(cur, x, y, d)
+            let head = [rx, ry, degrees(rot), flag(large), flag(sweep)]
+            [spelling("A", list.concat(head, [x, y]), ae, ae),
+             spelling("a", list.concat(head, [x - cur.x, y - cur.y]), re, re)]
+        SvgClosePath                              => [spelling("Z", [], w.start, w.start)]
+
+// Which control point a command leaves for the next `S` or `T`: 1 for
+// a cubic, 2 for a quadratic, 0 for none.
+fn curve_kind(c: SvgPathCmd) -> Int
+    match c
+        SvgCubicTo(_, _, _, _, _, _) => 1
+        SvgQuadTo(_, _, _, _)        => 2
+        _                            => 0
+
+// The compact writer after one more command.
+fn compact_step(w: Compact, c: SvgPathCmd) -> Compact
+    let sp = shortest(w, spellings(w, c))
+    let is_move = sp.letter == "M" or sp.letter == "m"
+    Compact { out: w.out + encoded(w, sp), last: last_token(w, sp), letter: sp.letter,
+              cur: sp.end, start: (if is_move then sp.end else w.start), ctrl: sp.ctrl,
+              kind: curve_kind(c), decimals: w.decimals }

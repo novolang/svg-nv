@@ -35,6 +35,8 @@
 
 use svgdoc
 use svgpath
+use svgstyle
+use svgnum
 
 // How a document is written out.
 //
@@ -74,7 +76,8 @@ pub struct SvgWriteStyle
 //     println("${svgwrite.pretty().indent}")
 // ```
 pub fn pretty() -> SvgWriteStyle
-    todo("svg-nv.svgwrite.pretty")
+    SvgWriteStyle { indent: 2, decimals: 3, newlines: true, xml_declaration: false,
+                    compact_paths: false }
 
 // No indent, no newlines, two decimals, compact paths.
 //
@@ -87,7 +90,8 @@ pub fn pretty() -> SvgWriteStyle
 //     println("${svgwrite.minimal().indent}")
 // ```
 pub fn minimal() -> SvgWriteStyle
-    todo("svg-nv.svgwrite.minimal")
+    SvgWriteStyle { indent: 0, decimals: 2, newlines: false, xml_declaration: false,
+                    compact_paths: true }
 
 // The whole document as one string.
 //
@@ -101,7 +105,16 @@ pub fn minimal() -> SvgWriteStyle
 //         Err(_) => println("refused")
 // ```
 pub fn to_string(doc: SvgDocument, style: SvgWriteStyle) -> Result<Str, SvgFault>
-    todo("svg-nv.svgwrite.to_string")
+    let head = prologue(style) + root_tag(doc, style)
+    if bad_attr(root_attrs(doc, style)) != ""
+        return Err(root_fault(doc, style, 0))
+    if list.len(doc.children) == 0
+        return Ok(head + "/>" + newline(style))
+    var text = head + ">" + newline(style)
+    let pv = initial_values(style.decimals)
+    for k in doc.children
+        text = text + subtree(k, pv, 1, style, str.len(text))!
+    Ok(text + "</svg>" + newline(style))
 
 // One element of a document, and everything under it, as one string.
 //
@@ -118,7 +131,7 @@ pub fn to_string(doc: SvgDocument, style: SvgWriteStyle) -> Result<Str, SvgFault
 //         Err(_) => println("refused")
 // ```
 pub fn node_to_string(n: SvgNode, style: SvgWriteStyle) -> Result<Str, SvgFault>
-    todo("svg-nv.svgwrite.node_to_string")
+    subtree(n, initial_values(style.decimals), 0, style, 0)
 
 // A document being written out, one element at a time.
 //
@@ -158,7 +171,8 @@ pub struct SvgWriter
 //     println("${svgwrite.writer(svgdoc.document(10.0, 10.0, []), svgwrite.minimal()).emitted}")
 // ```
 pub fn writer(doc: SvgDocument, style: SvgWriteStyle) -> SvgWriter
-    todo("svg-nv.svgwrite.writer")
+    SvgWriter { document: doc, style: style, cursor: [], emitted: 0,
+                total: 1 + list.sum(list.map(doc.children, written_count)) }
 
 // The writer advanced past one element, and that element's text.
 //
@@ -178,7 +192,38 @@ pub fn writer(doc: SvgDocument, style: SvgWriteStyle) -> SvgWriter
 //     println("${svgwrite.is_done(w2)} ${chunk}")
 // ```
 pub fn next_chunk(w: SvgWriter) -> (SvgWriter, Str)
-    todo("svg-nv.svgwrite.next_chunk")
+    if w.emitted >= w.total
+        return (w, "")
+    if w.emitted == 0
+        return open_root(w)
+    let doc = w.document
+    let st = w.style
+    let at = w.cursor
+    let n = node_at(doc, at)
+    let depth = list.len(at)
+    let attrs = node_attrs(n, parent_values(doc, at, st.decimals), st)
+    var text = indentation(st, depth) + element(n, attrs, has_open_tag(n)) + newline(st)
+    var next = list.clone(at)
+    if has_open_tag(n)
+        list.push(next, 0)
+    else
+        var climbing = true
+        while climbing
+            let k = list.len(next)
+            next[k - 1] = next[k - 1] + 1
+            var parent = next[:k - 1]
+            if next[k - 1] < sibling_count(doc, parent)
+                climbing = false
+            else
+                next = parent
+                if list.len(next) == 0
+                    text = text + "</svg>" + newline(st)
+                    climbing = false
+                else
+                    text = text + indentation(st, list.len(next)) + "</g>" + newline(st)
+    (SvgWriter { document: doc, style: st, cursor: next, emitted: w.emitted + 1,
+                 total: w.total },
+                 text)
 
 // Whether the writer has handed out every element.
 //
@@ -190,7 +235,7 @@ pub fn next_chunk(w: SvgWriter) -> (SvgWriter, Str)
 //     println("${svgwrite.is_done(svgwrite.writer(svgdoc.document(10.0, 10.0, []), svgwrite.minimal()))}")
 // ```
 pub fn is_done(w: SvgWriter) -> Bool
-    todo("svg-nv.svgwrite.is_done")
+    w.emitted >= w.total
 
 // How far through the document the writer is, `0.0 ..= 1.0`.
 //
@@ -202,7 +247,7 @@ pub fn is_done(w: SvgWriter) -> Bool
 //     println("${svgwrite.progress(svgwrite.writer(svgdoc.document(10.0, 10.0, []), svgwrite.minimal()))}")
 // ```
 pub fn progress(w: SvgWriter) -> Float
-    todo("svg-nv.svgwrite.progress")
+    w.emitted as Float / w.total as Float
 
 // A number as this package writes it: `decimals` digits past the point,
 // trailing zeroes dropped, and no exponent.
@@ -221,7 +266,7 @@ pub fn progress(w: SvgWriter) -> Float
 //     println(svgwrite.number(2.5000, 3))
 // ```
 pub fn number(v: Float, decimals: Int) -> Str
-    todo("svg-nv.svgwrite.number")
+    svgnum.format(v, decimals)
 
 // A string with XML's five predefined entities escaped.
 //
@@ -236,7 +281,15 @@ pub fn number(v: Float, decimals: Int) -> Str
 //     println(svgwrite.escape("a & b"))
 // ```
 pub fn escape(s: Str) -> Str
-    todo("svg-nv.svgwrite.escape")
+    var out = ""
+    var run = 0
+    let n = str.len(s)
+    for i in 0..n
+        let e = entity_for(str.byte_at_or(s, i, 0))
+        if e != ""
+            out = out + str.slice(s, run, i) + e
+            run = i + 1
+    out + str.slice(s, run, n)
 
 // A transform as SVG's `matrix(a b c d e f)`, or `""` for the identity.
 //
@@ -252,7 +305,11 @@ pub fn escape(s: Str) -> Str
 //     println(svgwrite.transform_attr(svgdoc.no_transform(), 3))
 // ```
 pub fn transform_attr(t: SvgTransform, decimals: Int) -> Str
-    todo("svg-nv.svgwrite.transform_attr")
+    let vs = [t.a, t.b, t.c, t.d, t.e, t.f]
+    let text = str.join(list.map(vs, v => svgnum.format(v, decimals)), " ")
+    if text == "1 0 0 1 0 0"
+        return ""
+    "matrix(" + text + ")"
 
 // How many bytes the document would come to, without building it.
 //
@@ -268,4 +325,318 @@ pub fn transform_attr(t: SvgTransform, decimals: Int) -> Str
 //     println("${svgwrite.byte_length(svgdoc.document(10.0, 10.0, []), svgwrite.minimal())}")
 // ```
 pub fn byte_length(doc: SvgDocument, style: SvgWriteStyle) -> Int
-    todo("svg-nv.svgwrite.byte_length")
+    var w = writer(doc, style)
+    var total = 0
+    while not is_done(w)
+        let (next, chunk) = next_chunk(w)
+        total = total + str.len(chunk)
+        w = next
+    total
+
+// The entity a byte is written as, or `""` for a byte written as
+// itself.
+fn entity_for(b: Int) -> Str
+    match b
+        38 => "&amp;"
+        60 => "&lt;"
+        62 => "&gt;"
+        34 => "&quot;"
+        39 => "&apos;"
+        _  => ""
+
+fn newline(st: SvgWriteStyle) -> Str
+    if st.newlines
+        "\n"
+    else
+        ""
+
+// The spaces that start a line at nesting `depth`.  A document written
+// without newlines is one line, and nothing indents it.
+fn indentation(st: SvgWriteStyle, depth: Int) -> Str
+    if st.newlines
+        str.repeat(" ", st.indent * depth)
+    else
+        ""
+
+fn prologue(st: SvgWriteStyle) -> Str
+    if st.xml_declaration
+        return "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" + newline(st)
+    ""
+
+// One attribute as the writer holds it before writing: its name, its
+// value unescaped, and whether the value is made of numbers.
+struct Attr
+    name: Str
+    value: Str
+    numeric: Bool
+
+fn attr(name: Str, value: Str, numeric: Bool) -> Attr
+    Attr { name: name, value: value, numeric: numeric }
+
+fn attrs_text(attrs: [Attr]) -> Str
+    str.join(list.map(attrs, a => " " + a.name + "=\"" + escape(a.value) + "\""), "")
+
+// The value in a numeric attribute that has no SVG spelling, or `""`.
+// `svgnum` writes a value that is not finite as `NaN`, `inf` or
+// `-inf`, and no path letter, separator or `matrix` spells either.
+fn bad_value(v: Str) -> Str
+    if str.contains(v, "NaN")
+        return "NaN"
+    if str.contains(v, "-inf")
+        return "-inf"
+    if str.contains(v, "inf")
+        return "inf"
+    ""
+
+// The first numeric attribute holding a value that is not finite, as
+// its name, or `""`.
+fn bad_attr(attrs: [Attr]) -> Str
+    for a in attrs
+        if a.numeric and bad_value(a.value) != ""
+            return a.name
+    ""
+
+// The fault for the first bad attribute of a tag written from byte
+// `base`: the offset is where the attribute's name starts.  A caller
+// has found with `bad_attr` that there is one.
+fn attr_fault(tag: Str, attrs: [Attr], base: Int) -> SvgFault
+    var at = base + 1 + str.len(tag)
+    var k = 0
+    while not attrs[k].numeric or bad_value(attrs[k].value) == ""
+        at = at + str.len(" " + attrs[k].name + "=\"" + escape(attrs[k].value) + "\"")
+        k = k + 1
+    SvgBadNumber(at + 1, attrs[k].name, bad_value(attrs[k].value))
+
+fn root_attrs(doc: SvgDocument, st: SvgWriteStyle) -> [Attr]
+    let d = st.decimals
+    var attrs = [attr("xmlns", "http://www.w3.org/2000/svg", false),
+                 attr("width", svgnum.format(doc.width.value, d) + svgstyle.unit_suffix(doc.width.unit),
+                      true),
+                 attr("height",
+                      svgnum.format(doc.height.value, d) + svgstyle.unit_suffix(doc.height.unit),
+                      true)]
+    let v = doc.view_box
+    if v.width != 0.0 or v.height != 0.0
+        list.push(attrs, attr("viewBox", spaced([v.x, v.y, v.width, v.height], d), true))
+    attrs
+
+// The root element's opening tag, without its closing `>` or `/>`.
+fn root_tag(doc: SvgDocument, st: SvgWriteStyle) -> Str
+    "<svg" + attrs_text(root_attrs(doc, st))
+
+fn root_fault(doc: SvgDocument, st: SvgWriteStyle, base: Int) -> SvgFault
+    attr_fault("svg", root_attrs(doc, st), base + str.len(prologue(st)))
+
+// The first chunk: the declaration if the style asks for one, and the
+// root element's opening tag, or the whole root when it is empty.
+fn open_root(w: SvgWriter) -> (SvgWriter, Str)
+    let doc = w.document
+    let st = w.style
+    let head = prologue(st) + root_tag(doc, st)
+    if list.len(doc.children) == 0
+        return (SvgWriter { document: doc, style: st, cursor: [], emitted: 1, total: w.total },
+                head + "/>" + newline(st))
+    (SvgWriter { document: doc, style: st, cursor: [0], emitted: 1, total: w.total },
+     head + ">" + newline(st))
+
+// How many elements a subtree writes.  A leaf's children are kept and
+// never written.
+fn written_count(n: SvgNode) -> Int
+    if svgdoc.is_leaf(n)
+        return 1
+    1 + list.sum(list.map(n.children, written_count))
+
+// Whether a node is written as an opening tag with children after it,
+// rather than as one complete element.
+fn has_open_tag(n: SvgNode) -> Bool
+    not svgdoc.is_leaf(n) and list.len(n.children) > 0
+
+// The node a writer's cursor names: an index into the document's
+// children, then one into that node's children, and so on.
+fn node_at(doc: SvgDocument, cursor: [Int]) -> SvgNode
+    var n = doc.children[cursor[0]]
+    for i in 1..list.len(cursor)
+        n = n.children[cursor[i]]
+    n
+
+// How many children the node at `path` has; the document's own for an
+// empty path.
+fn sibling_count(doc: SvgDocument, cursor: [Int]) -> Int
+    if list.len(cursor) == 0
+        return list.len(doc.children)
+    list.len(node_at(doc, cursor).children)
+
+// The names of the inherited presentation attributes, in the order the
+// writer writes them.  SVG 1.1 section 6.1 lists which properties
+// inherit; `opacity` does not and is written apart.
+fn inherited_names() -> [Str]
+    ["fill", "fill-opacity", "fill-rule", "stroke", "stroke-opacity", "stroke-width",
+     "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-dasharray",
+     "stroke-dashoffset", "font-family", "font-size", "font-weight", "font-style",
+     "text-anchor"]
+
+// Which of the inherited attributes hold numbers.
+fn inherited_numeric() -> [Bool]
+    [false, true, false, false, true, true, false, false, true, true, true, false, true, false,
+     false, false]
+
+// An alpha written as an opacity.  Three decimals at least, so that the
+// byte a reader rounds it back to is the byte that was written.
+fn opacity_value(p: SvgPaint, inherited: Str, d: Int) -> Str
+    match p
+        SvgPaintColor(c) => svgnum.format(c.a as Float / 255.0, math.max(d, 3))
+        _                => inherited
+
+fn dash_value(pattern: [Float], d: Int) -> Str
+    if list.len(pattern) == 0
+        return "none"
+    str.join(list.map(pattern, v => svgnum.format(v, d)), ",")
+
+// The inherited attributes as a reader of the written text would hold
+// them at this node, given the values at its parent.  A colour's alpha
+// travels as `fill-opacity` or `stroke-opacity`, and a paint that is
+// not a colour leaves the inherited opacity as it was.
+fn inherited_values(s: SvgStyle, parent: [Str], d: Int) -> [Str]
+    [svgstyle.paint_to_string(s.fill),
+     opacity_value(s.fill, parent[1], d),
+     svgstyle.fill_rule_to_string(s.fill_rule),
+     svgstyle.paint_to_string(s.stroke),
+     opacity_value(s.stroke, parent[4], d),
+     svgnum.format(s.stroke_width, d),
+     svgstyle.cap_to_string(s.stroke_cap),
+     svgstyle.join_to_string(s.stroke_join),
+     svgnum.format(s.miter_limit, d),
+     dash_value(s.stroke_dash, d),
+     svgnum.format(s.stroke_dash_offset, d),
+     s.font.family,
+     svgnum.format(s.font.size, d),
+     str.from_int(s.font.weight),
+     (if s.font.italic then "italic" else "normal"),
+     svgstyle.anchor_to_string(s.text_anchor)]
+
+// The inherited values at the root: SVG's initial values, with both
+// opacities 1.
+fn initial_values(d: Int) -> [Str]
+    inherited_values(svgstyle.plain(), ["", "1", "", "", "1"], d)
+
+// The inherited values at the parent of the node at `path`.
+fn parent_values(doc: SvgDocument, cursor: [Int], d: Int) -> [Str]
+    var vals = initial_values(d)
+    var n = doc.children[cursor[0]]
+    for i in 1..list.len(cursor)
+        vals = inherited_values(n.style, vals, d)
+        n = n.children[cursor[i]]
+    vals
+
+// A position attribute, left out when it is zero, which is SVG's
+// initial value for every one of them.
+fn position(var attrs: [Attr], name: Str, v: Float, d: Int)
+    let text = svgnum.format(v, d)
+    if text != "0"
+        list.push(attrs, attr(name, text, true))
+
+fn points_value(ps: [GeomPointF], d: Int) -> Str
+    var parts: [Str] = []
+    for q in ps
+        list.push(parts, svgnum.format(q.x, d) + "," + svgnum.format(q.y, d))
+    str.join(parts, " ")
+
+// The geometry attributes of a shape.  A rectangle's `ry` is left out
+// when it equals `rx`, and both when both are zero, because a reader
+// takes a missing radius from the other one.
+fn shape_attrs(var attrs: [Attr], s: SvgShape, st: SvgWriteStyle)
+    let d = st.decimals
+    match s
+        SvgGroupShape                    => attrs
+        SvgRectShape(x, y, w, h, rx, ry) =>
+            position(attrs, "x", x, d)
+            position(attrs, "y", y, d)
+            list.push(attrs, attr("width", svgnum.format(w, d), true))
+            list.push(attrs, attr("height", svgnum.format(h, d), true))
+            let rxs = svgnum.format(rx, d)
+            let rys = svgnum.format(ry, d)
+            if rxs != "0" or rys != "0"
+                list.push(attrs, attr("rx", rxs, true))
+            if rys != rxs
+                list.push(attrs, attr("ry", rys, true))
+        SvgCircleShape(cx, cy, r)        =>
+            position(attrs, "cx", cx, d)
+            position(attrs, "cy", cy, d)
+            list.push(attrs, attr("r", svgnum.format(r, d), true))
+        SvgEllipseShape(cx, cy, rx, ry)  =>
+            position(attrs, "cx", cx, d)
+            position(attrs, "cy", cy, d)
+            list.push(attrs, attr("rx", svgnum.format(rx, d), true))
+            list.push(attrs, attr("ry", svgnum.format(ry, d), true))
+        SvgLineShape(x1, y1, x2, y2)     =>
+            position(attrs, "x1", x1, d)
+            position(attrs, "y1", y1, d)
+            position(attrs, "x2", x2, d)
+            position(attrs, "y2", y2, d)
+        SvgPolylineShape(ps)             => list.push(attrs, attr("points", points_value(ps, d), true))
+        SvgPolygonShape(ps)              => list.push(attrs, attr("points", points_value(ps, d), true))
+        SvgPathShape(p)                  =>
+            list.push(attrs, attr("d", path_value(p, st), true))
+        SvgTextShape(_, x, y)            =>
+            position(attrs, "x", x, d)
+            position(attrs, "y", y, d)
+
+fn path_value(p: SvgPath, st: SvgWriteStyle) -> Str
+    if st.compact_paths
+        return svgpath.to_string_compact(p, st.decimals)
+    svgpath.to_string(p, st.decimals)
+
+// Every attribute of a node, in the order they are written: the id,
+// the geometry, the transform, the inherited presentation attributes
+// that differ from the parent's, and the opacity.
+fn node_attrs(n: SvgNode, parent: [Str], st: SvgWriteStyle) -> [Attr]
+    let d = st.decimals
+    var attrs: [Attr] = []
+    if n.id != ""
+        list.push(attrs, attr("id", n.id, false))
+    shape_attrs(attrs, n.shape, st)
+    let t = transform_attr(n.transform, d)
+    if t != ""
+        list.push(attrs, attr("transform", t, true))
+    let vals = inherited_values(n.style, parent, d)
+    let names = inherited_names()
+    let numeric = inherited_numeric()
+    for i in 0..list.len(names)
+        if vals[i] != parent[i]
+            list.push(attrs, attr(names[i], vals[i], numeric[i]))
+    let op = svgnum.format(n.style.opacity, d)
+    if op != "1"
+        list.push(attrs, attr("opacity", op, true))
+    attrs
+
+// One element's text.  `open` writes an opening tag for a group whose
+// children follow; otherwise the element is complete.
+fn element(n: SvgNode, attrs: [Attr], open: Bool) -> Str
+    let tag = svgdoc.shape_tag(n.shape)
+    let head = "<" + tag + attrs_text(attrs)
+    match n.shape
+        SvgTextShape(content, _, _) => head + ">" + escape(content) + "</text>"
+        _                           => if open
+            head + ">"
+        else
+            head + "/>"
+
+// A subtree's text at nesting `depth`, starting at byte `base` of the
+// whole output, or the fault for its first value with no spelling.
+fn subtree(n: SvgNode, parent: [Str], depth: Int, st: SvgWriteStyle,
+           base: Int) -> Result<Str, SvgFault>
+    let head = indentation(st, depth)
+    let attrs = node_attrs(n, parent, st)
+    if bad_attr(attrs) != ""
+        return Err(attr_fault(svgdoc.shape_tag(n.shape), attrs, base + str.len(head)))
+    let open = has_open_tag(n)
+    var text = head + element(n, attrs, open) + newline(st)
+    if open
+        let vals = inherited_values(n.style, parent, st.decimals)
+        for k in n.children
+            text = text + subtree(k, vals, depth + 1, st, base + str.len(text))!
+        text = text + head + "</g>" + newline(st)
+    Ok(text)
+
+fn spaced(vs: [Float], d: Int) -> Str
+    str.join(list.map(vs, v => svgnum.format(v, d)), " ")

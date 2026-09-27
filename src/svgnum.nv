@@ -1,0 +1,88 @@
+// svgnum.nv — how every number in a written document is spelled.
+//
+// A number is written with at most a given count of digits past the
+// point, with trailing zeroes dropped and never with an exponent.  An
+// SVG attribute value is read by the CSS number grammar in some places
+// and by SVG's own in others, and a plain decimal is the one spelling
+// both accept.  Every other module formats through this one, so a
+// coordinate, a length and a transform entry agree on the spelling.
+//
+// A value that is not finite has no SVG spelling.  It is written as
+// `NaN`, `inf` or `-inf`, which no reader accepts, and the whole-document
+// writer refuses a document holding one.
+//
+// No effects.
+
+// The largest count of digits past the point this module writes.  A
+// double carries about sixteen significant digits, so a larger count
+// would write digits that are rounding noise.
+fn max_decimals() -> Int
+    12
+
+// Ten to the power `n`, as a float, for `0 <= n <= max_decimals()`.
+fn pow10(n: Int) -> Float
+    var p = 1.0
+    for _ in 0..n
+        p = p * 10.0
+    p
+
+// The decimal digits of a whole, non-negative float.  Values past the
+// integer range are spelled a digit at a time with float arithmetic,
+// which is exact for the powers of ten a test would write and within a
+// rounding step of the value for any other.
+fn whole_digits(w: Float) -> Str
+    if w < 9.0e18
+        return str.from_int(w as Int)
+    var out = ""
+    var x = w
+    while x >= 1.0
+        let q = math.floor(x / 10.0)
+        let digit = x - q * 10.0
+        out = str.from_int(digit as Int) + out
+        x = q
+    out
+
+// The fraction digits, `decimals` of them, with the trailing zeroes
+// removed.  `units` is the fraction scaled to a whole number.
+fn fraction_digits(units: Float, decimals: Int) -> Str
+    if units < 0.5
+        return ""
+    let raw = str.pad_left(str.from_int(units as Int), decimals, "0")
+    var end = str.len(raw)
+    while end > 0 and str.byte_at_or(raw, end - 1, 0) == '0'
+        end = end - 1
+    str.slice(raw, 0, end)
+
+// `v` with at most `decimals` digits past the point, trailing zeroes
+// dropped, no exponent, and no sign on a value that rounds to zero.
+fn format(v: Float, decimals: Int) -> Str
+    if math.is_nan(v)
+        return "NaN"
+    if math.is_inf(v)
+        return if v > 0.0 then "inf" else "-inf"
+    let d = math.max(0, math.min(decimals, max_decimals()))
+    let scale = pow10(d)
+    let x = math.abs(v)
+    var whole = math.floor(x)
+    var units = math.round((x - whole) * scale)
+    if units >= scale
+        units = units - scale
+        whole = whole + 1.0
+    let frac = fraction_digits(units, d)
+    let body = if frac == ""
+        whole_digits(whole)
+    else
+        whole_digits(whole) + "." + frac
+    if body == "0" or v > 0.0
+        return body
+    "-" + body
+
+// The same number without its leading zero, `0.5` as `.5` and `-0.5`
+// as `-.5`: the spelling a compact path uses.
+fn format_short(v: Float, decimals: Int) -> Str
+    let s = format(v, decimals)
+    if str.starts_with(s, "0.")
+        return str.slice(s, 1, str.len(s))
+    if str.starts_with(s, "-0.")
+        return "-" + str.slice(s, 2, str.len(s))
+    s

@@ -29,6 +29,8 @@
 // NO EFFECTS.
 
 use srgb
+use colortext
+use svgnum
 
 // How the interior or the outline of a shape is filled in.
 //
@@ -229,7 +231,19 @@ pub struct SvgStyle
 //     println("${svgstyle.plain().opacity}")
 // ```
 pub fn plain() -> SvgStyle
-    todo("svg-nv.svgstyle.plain")
+    SvgStyle {
+        fill: SvgPaintColor(srgb.opaque(srgb.black())),
+        stroke: SvgPaintNone,
+        stroke_width: 1.0,
+        stroke_cap: SvgCapButt,
+        stroke_join: SvgJoinMiter,
+        miter_limit: 4.0,
+        stroke_dash: [],
+        stroke_dash_offset: 0.0,
+        opacity: 1.0,
+        fill_rule: GeomNonZero,
+        font: default_font(),
+        text_anchor: SvgAnchorStart }
 
 // A style that fills with one colour and strokes nothing.
 //
@@ -241,7 +255,7 @@ pub fn plain() -> SvgStyle
 //     println("${svgstyle.filled(srgb.opaque(srgb.rgb8(255, 0, 0))).opacity}")
 // ```
 pub fn filled(color: Srgba8) -> SvgStyle
-    todo("svg-nv.svgstyle.filled")
+    with_fill(plain(), SvgPaintColor(color))
 
 // A style that strokes with one colour and fills nothing.
 //
@@ -257,7 +271,7 @@ pub fn filled(color: Srgba8) -> SvgStyle
 //     println("${svgstyle.stroked(srgb.opaque(srgb.rgb8(0, 0, 255)), 2.0).stroke_width}")
 // ```
 pub fn stroked(color: Srgba8, width: Float) -> SvgStyle
-    todo("svg-nv.svgstyle.stroked")
+    with_stroke(with_fill(plain(), SvgPaintNone), SvgPaintColor(color), width)
 
 // The same style with a different fill.
 //
@@ -268,7 +282,19 @@ pub fn stroked(color: Srgba8, width: Float) -> SvgStyle
 //     println("${svgstyle.with_fill(svgstyle.plain(), SvgPaintNone).opacity}")
 // ```
 pub fn with_fill(s: SvgStyle, p: SvgPaint) -> SvgStyle
-    todo("svg-nv.svgstyle.with_fill")
+    SvgStyle {
+        fill: p,
+        stroke: s.stroke,
+        stroke_width: s.stroke_width,
+        stroke_cap: s.stroke_cap,
+        stroke_join: s.stroke_join,
+        miter_limit: s.miter_limit,
+        stroke_dash: s.stroke_dash,
+        stroke_dash_offset: s.stroke_dash_offset,
+        opacity: s.opacity,
+        fill_rule: s.fill_rule,
+        font: s.font,
+        text_anchor: s.text_anchor }
 
 // The same style with a different stroke.
 //
@@ -279,7 +305,19 @@ pub fn with_fill(s: SvgStyle, p: SvgPaint) -> SvgStyle
 //     println("${svgstyle.with_stroke(svgstyle.plain(), SvgPaintNone, 1.0).stroke_width}")
 // ```
 pub fn with_stroke(s: SvgStyle, p: SvgPaint, width: Float) -> SvgStyle
-    todo("svg-nv.svgstyle.with_stroke")
+    SvgStyle {
+        fill: s.fill,
+        stroke: p,
+        stroke_width: width,
+        stroke_cap: s.stroke_cap,
+        stroke_join: s.stroke_join,
+        miter_limit: s.miter_limit,
+        stroke_dash: s.stroke_dash,
+        stroke_dash_offset: s.stroke_dash_offset,
+        opacity: s.opacity,
+        fill_rule: s.fill_rule,
+        font: s.font,
+        text_anchor: s.text_anchor }
 
 // The same style with a dash pattern.
 //
@@ -290,7 +328,19 @@ pub fn with_stroke(s: SvgStyle, p: SvgPaint, width: Float) -> SvgStyle
 //     println("${svgstyle.with_dash(svgstyle.plain(), [4.0, 2.0], 0.0).stroke_dash_offset}")
 // ```
 pub fn with_dash(s: SvgStyle, pattern: [Float], offset: Float) -> SvgStyle
-    todo("svg-nv.svgstyle.with_dash")
+    SvgStyle {
+        fill: s.fill,
+        stroke: s.stroke,
+        stroke_width: s.stroke_width,
+        stroke_cap: s.stroke_cap,
+        stroke_join: s.stroke_join,
+        miter_limit: s.miter_limit,
+        stroke_dash: pattern,
+        stroke_dash_offset: offset,
+        opacity: s.opacity,
+        fill_rule: s.fill_rule,
+        font: s.font,
+        text_anchor: s.text_anchor }
 
 // The same style with a different opacity.
 //
@@ -301,7 +351,19 @@ pub fn with_dash(s: SvgStyle, pattern: [Float], offset: Float) -> SvgStyle
 //     println("${svgstyle.with_opacity(svgstyle.plain(), 0.5).opacity}")
 // ```
 pub fn with_opacity(s: SvgStyle, opacity: Float) -> SvgStyle
-    todo("svg-nv.svgstyle.with_opacity")
+    SvgStyle {
+        fill: s.fill,
+        stroke: s.stroke,
+        stroke_width: s.stroke_width,
+        stroke_cap: s.stroke_cap,
+        stroke_join: s.stroke_join,
+        miter_limit: s.miter_limit,
+        stroke_dash: s.stroke_dash,
+        stroke_dash_offset: s.stroke_dash_offset,
+        opacity: opacity,
+        fill_rule: s.fill_rule,
+        font: s.font,
+        text_anchor: s.text_anchor }
 
 // The same style with a different font.
 //
@@ -312,7 +374,19 @@ pub fn with_opacity(s: SvgStyle, opacity: Float) -> SvgStyle
 //     println("${svgstyle.with_font(svgstyle.plain(), svgstyle.default_font()).font.size}")
 // ```
 pub fn with_font(s: SvgStyle, font: SvgFontSpec) -> SvgStyle
-    todo("svg-nv.svgstyle.with_font")
+    SvgStyle {
+        fill: s.fill,
+        stroke: s.stroke,
+        stroke_width: s.stroke_width,
+        stroke_cap: s.stroke_cap,
+        stroke_join: s.stroke_join,
+        miter_limit: s.miter_limit,
+        stroke_dash: s.stroke_dash,
+        stroke_dash_offset: s.stroke_dash_offset,
+        opacity: s.opacity,
+        fill_rule: s.fill_rule,
+        font: font,
+        text_anchor: s.text_anchor }
 
 // The same style with a different text anchor.
 //
@@ -324,7 +398,19 @@ pub fn with_font(s: SvgStyle, font: SvgFontSpec) -> SvgStyle
 //     println(svgstyle.anchor_to_string(s.text_anchor))
 // ```
 pub fn with_anchor(s: SvgStyle, anchor: SvgTextAnchor) -> SvgStyle
-    todo("svg-nv.svgstyle.with_anchor")
+    SvgStyle {
+        fill: s.fill,
+        stroke: s.stroke,
+        stroke_width: s.stroke_width,
+        stroke_cap: s.stroke_cap,
+        stroke_join: s.stroke_join,
+        miter_limit: s.miter_limit,
+        stroke_dash: s.stroke_dash,
+        stroke_dash_offset: s.stroke_dash_offset,
+        opacity: s.opacity,
+        fill_rule: s.fill_rule,
+        font: s.font,
+        text_anchor: anchor }
 
 // SVG's default font: 16 user units of the generic sans-serif family,
 // normal weight, upright.
@@ -336,7 +422,7 @@ pub fn with_anchor(s: SvgStyle, anchor: SvgTextAnchor) -> SvgStyle
 //     println("${svgstyle.default_font().weight}")
 // ```
 pub fn default_font() -> SvgFontSpec
-    todo("svg-nv.svgstyle.default_font")
+    font("sans-serif", 16.0, 400, false)
 
 // A font from its family, size and weight.
 //
@@ -347,7 +433,7 @@ pub fn default_font() -> SvgFontSpec
 //     println("${svgstyle.font("monospace", 12.0, 400, false).size}")
 // ```
 pub fn font(family: Str, size: Float, weight: Int, italic: Bool) -> SvgFontSpec
-    todo("svg-nv.svgstyle.font")
+    SvgFontSpec { family: family, size: size, weight: weight, italic: italic }
 
 // A length in user units — the one with no suffix.
 //
@@ -358,7 +444,7 @@ pub fn font(family: Str, size: Float, weight: Int, italic: Bool) -> SvgFontSpec
 //     println("${svgstyle.user(640.0).value}")
 // ```
 pub fn user(value: Float) -> SvgLength
-    todo("svg-nv.svgstyle.user")
+    SvgLength { value: value, unit: SvgUnitUser }
 
 // A length in pixels.
 //
@@ -369,7 +455,7 @@ pub fn user(value: Float) -> SvgLength
 //     println("${svgstyle.px(640.0).value}")
 // ```
 pub fn px(value: Float) -> SvgLength
-    todo("svg-nv.svgstyle.px")
+    SvgLength { value: value, unit: SvgUnitPx }
 
 // A length as a percentage of the viewport.
 //
@@ -380,7 +466,7 @@ pub fn px(value: Float) -> SvgLength
 //     println("${svgstyle.percent(50.0).value}")
 // ```
 pub fn percent(value: Float) -> SvgLength
-    todo("svg-nv.svgstyle.percent")
+    SvgLength { value: value, unit: SvgUnitPercent }
 
 // A length as the number of user units it is worth, given how big the
 // viewport is on that axis.
@@ -396,7 +482,14 @@ pub fn percent(value: Float) -> SvgLength
 //     println("${svgstyle.to_user_units(svgstyle.percent(50.0), 640.0)}")
 // ```
 pub fn to_user_units(l: SvgLength, viewport_extent: Float) -> Float
-    todo("svg-nv.svgstyle.to_user_units")
+    match l.unit
+        SvgUnitUser    => l.value
+        SvgUnitPx      => l.value
+        SvgUnitPercent => l.value * viewport_extent / 100.0
+        SvgUnitPt      => l.value * 96.0 / 72.0
+        SvgUnitMm      => l.value * 96.0 / 25.4
+        SvgUnitCm      => l.value * 96.0 / 2.54
+        SvgUnitIn      => l.value * 96.0
 
 // The suffix a unit is written with — `""` for a user unit.
 //
@@ -407,7 +500,14 @@ pub fn to_user_units(l: SvgLength, viewport_extent: Float) -> Float
 //     println(svgstyle.unit_suffix(SvgUnitPercent))
 // ```
 pub fn unit_suffix(u: SvgUnitKind) -> Str
-    todo("svg-nv.svgstyle.unit_suffix")
+    match u
+        SvgUnitUser    => ""
+        SvgUnitPx      => "px"
+        SvgUnitPercent => "%"
+        SvgUnitPt      => "pt"
+        SvgUnitMm      => "mm"
+        SvgUnitCm      => "cm"
+        SvgUnitIn      => "in"
 
 // A length as SVG writes it: the number and its suffix.
 //
@@ -418,7 +518,7 @@ pub fn unit_suffix(u: SvgUnitKind) -> Str
 //     println(svgstyle.length_to_string(svgstyle.px(640.0)))
 // ```
 pub fn length_to_string(l: SvgLength) -> Str
-    todo("svg-nv.svgstyle.length_to_string")
+    svgnum.format(l.value, 6) + unit_suffix(l.unit)
 
 // A paint as SVG writes it: `"none"`, `"#rrggbb"` or `"url(#id)"`.
 //
@@ -433,7 +533,10 @@ pub fn length_to_string(l: SvgLength) -> Str
 //     println(svgstyle.paint_to_string(SvgPaintNone))
 // ```
 pub fn paint_to_string(p: SvgPaint) -> Str
-    todo("svg-nv.svgstyle.paint_to_string")
+    match p
+        SvgPaintNone     => "none"
+        SvgPaintColor(c) => colortext.format_hex(c.rgb)
+        SvgPaintRef(id)  => "url(#" + id + ")"
 
 // A paint's coverage as SVG's separate opacity attribute, `0.0 ..= 1.0`.
 //
@@ -444,7 +547,10 @@ pub fn paint_to_string(p: SvgPaint) -> Str
 //     println("${svgstyle.paint_opacity(SvgPaintNone)}")
 // ```
 pub fn paint_opacity(p: SvgPaint) -> Float
-    todo("svg-nv.svgstyle.paint_opacity")
+    match p
+        SvgPaintNone     => 0.0
+        SvgPaintColor(c) => c.a as Float / 255.0
+        SvgPaintRef(_)   => 1.0
 
 // A line cap as SVG writes it.
 //
@@ -455,7 +561,10 @@ pub fn paint_opacity(p: SvgPaint) -> Float
 //     println(svgstyle.cap_to_string(SvgCapRound))
 // ```
 pub fn cap_to_string(c: SvgLineCap) -> Str
-    todo("svg-nv.svgstyle.cap_to_string")
+    match c
+        SvgCapButt   => "butt"
+        SvgCapRound  => "round"
+        SvgCapSquare => "square"
 
 // A line join as SVG writes it.
 //
@@ -466,7 +575,10 @@ pub fn cap_to_string(c: SvgLineCap) -> Str
 //     println(svgstyle.join_to_string(SvgJoinRound))
 // ```
 pub fn join_to_string(j: SvgLineJoin) -> Str
-    todo("svg-nv.svgstyle.join_to_string")
+    match j
+        SvgJoinMiter => "miter"
+        SvgJoinRound => "round"
+        SvgJoinBevel => "bevel"
 
 // A text anchor as SVG writes it.
 //
@@ -477,7 +589,10 @@ pub fn join_to_string(j: SvgLineJoin) -> Str
 //     println(svgstyle.anchor_to_string(SvgAnchorEnd))
 // ```
 pub fn anchor_to_string(a: SvgTextAnchor) -> Str
-    todo("svg-nv.svgstyle.anchor_to_string")
+    match a
+        SvgAnchorStart  => "start"
+        SvgAnchorMiddle => "middle"
+        SvgAnchorEnd    => "end"
 
 // A fill rule as SVG writes it: `"nonzero"` or `"evenodd"`.
 //
@@ -488,7 +603,9 @@ pub fn anchor_to_string(a: SvgTextAnchor) -> Str
 //     println(svgstyle.fill_rule_to_string(GeomEvenOdd))
 // ```
 pub fn fill_rule_to_string(r: GeomFillRule) -> Str
-    todo("svg-nv.svgstyle.fill_rule_to_string")
+    match r
+        GeomNonZero => "nonzero"
+        GeomEvenOdd => "evenodd"
 
 // Whether a style would draw anything at all: some fill, or some stroke
 // with a width.
@@ -503,4 +620,8 @@ pub fn fill_rule_to_string(r: GeomFillRule) -> Str
 //     println("${svgstyle.is_visible(svgstyle.plain())}")
 // ```
 pub fn is_visible(s: SvgStyle) -> Bool
-    todo("svg-nv.svgstyle.is_visible")
+    if s.opacity <= 0.0
+        return false
+    let fills = paint_opacity(s.fill) > 0.0
+    let strokes = paint_opacity(s.stroke) > 0.0 and s.stroke_width > 0.0
+    fills or strokes

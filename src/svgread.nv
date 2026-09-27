@@ -44,6 +44,11 @@
 use svgdoc
 use svgpath
 use svgstyle
+use svgfault
+use geompoint
+use geomxform
+use srgb
+use colortext
 
 // What a parse left behind.
 //
@@ -84,7 +89,7 @@ pub struct SvgReadReport
 //         Err(_) => println("refused")
 // ```
 pub fn parse(text: Str) -> Result<SvgDocument, SvgFault>
-    todo("svg-nv.svgread.parse")
+    parse_within(text, default_depth())
 
 // The same, with a count of what was skipped.
 //
@@ -100,7 +105,7 @@ pub fn parse(text: Str) -> Result<SvgDocument, SvgFault>
 //         Err(_) => println("refused")
 // ```
 pub fn parse_report(text: Str) -> Result<SvgReadReport, SvgFault>
-    todo("svg-nv.svgread.parse_report")
+    read_document(text, default_depth())
 
 // The same, with a nesting limit of the caller's choosing.
 //
@@ -119,7 +124,8 @@ pub fn parse_report(text: Str) -> Result<SvgReadReport, SvgFault>
 //         Err(_) => println("refused")
 // ```
 pub fn parse_within(text: Str, max_depth: Int) -> Result<SvgDocument, SvgFault>
-    todo("svg-nv.svgread.parse_within")
+    let r = read_document(text, max_depth)!
+    Ok(r.document)
 
 // A path from a `d` attribute's text.
 //
@@ -138,7 +144,7 @@ pub fn parse_within(text: Str, max_depth: Int) -> Result<SvgDocument, SvgFault>
 //         Err(_) => println("refused")
 // ```
 pub fn parse_path(d: Str) -> Result<SvgPath, SvgFault>
-    todo("svg-nv.svgread.parse_path")
+    path_from(d, 0)
 
 // A transform from a `transform` attribute's text.
 //
@@ -157,7 +163,7 @@ pub fn parse_path(d: Str) -> Result<SvgPath, SvgFault>
 //         Err(_) => println("refused")
 // ```
 pub fn parse_transform(s: Str) -> Result<SvgTransform, SvgFault>
-    todo("svg-nv.svgread.parse_transform")
+    transform_from(s, 0)
 
 // A length from an attribute's text: a number and an optional unit.
 //
@@ -170,7 +176,7 @@ pub fn parse_transform(s: Str) -> Result<SvgTransform, SvgFault>
 //         Err(_) => println("refused")
 // ```
 pub fn parse_length(s: Str) -> Result<SvgLength, SvgFault>
-    todo("svg-nv.svgread.parse_length")
+    length_at(s, 0, "length")
 
 // A view box from a `viewBox` attribute's text: four numbers.
 //
@@ -183,7 +189,7 @@ pub fn parse_length(s: Str) -> Result<SvgLength, SvgFault>
 //         Err(_) => println("refused")
 // ```
 pub fn parse_view_box(s: Str) -> Result<SvgViewBox, SvgFault>
-    todo("svg-nv.svgread.parse_view_box")
+    view_box_at(s, 0)
 
 // A paint from a `fill` or `stroke` attribute's text.
 //
@@ -201,7 +207,9 @@ pub fn parse_view_box(s: Str) -> Result<SvgViewBox, SvgFault>
 //         Err(_) => println("refused")
 // ```
 pub fn parse_paint(s: Str) -> Result<SvgPaint, SvgFault>
-    todo("svg-nv.svgread.parse_paint")
+    match paint_from(s, srgb.opaque(srgb.black()))
+        Some(p) => Ok(p)
+        None    => Err(SvgBadNumber(leading_space(s), "paint", s))
 
 // A dash pattern from a `stroke-dasharray` attribute's text.
 //
@@ -220,7 +228,9 @@ pub fn parse_paint(s: Str) -> Result<SvgPaint, SvgFault>
 //         Err(_) => println("refused")
 // ```
 pub fn parse_dash_array(s: Str) -> Result<[Float], SvgFault>
-    todo("svg-nv.svgread.parse_dash_array")
+    var out: [Float] = []
+    dash_into(out, s, 0, 0.0, 0.0)!
+    Ok(out)
 
 // Whether the text looks like an SVG document at all: an `<svg>`
 // element somewhere near the start.
@@ -235,4 +245,1227 @@ pub fn parse_dash_array(s: Str) -> Result<[Float], SvgFault>
 //     println("${svgread.looks_like_svg("<svg/>")}")
 // ```
 pub fn looks_like_svg(text: Str) -> Bool
-    todo("svg-nv.svgread.looks_like_svg")
+    var sc = Scan { text: text, pos: 0, max_depth: 0 }
+    let _ = skip_misc(sc)
+    if not at_text(sc, "<svg")
+        return false
+    let b = byte(sc, sc.pos + 4)
+    is_space(b) or b == '>' or b == '/'
+
+// The nesting limit `parse` and `parse_report` use.
+fn default_depth() -> Int
+    256
+
+// ---------------------------------------------------------------------
+// Numbers and lists of numbers, by SVG 1.1's grammar for path data
+// (section 8.3.9), which the other attributes share.
+
+fn byte_of(s: Str, i: Int) -> Int
+    str.byte_at_or(s, i, 0 - 1)
+
+fn is_space(b: Int) -> Bool
+    b == ' ' or b == '\t' or b == '\n' or b == '\r'
+
+fn is_digit(b: Int) -> Bool
+    b >= '0' and b <= '9'
+
+// The index past whitespace and commas from `i`.
+fn skip_separators(s: Str, i: Int) -> Int
+    var j = i
+    while is_space(byte_of(s, j)) or byte_of(s, j) == ','
+        j = j + 1
+    j
+
+// How many bytes of whitespace start `s`.
+fn leading_space(s: Str) -> Int
+    var j = 0
+    while is_space(byte_of(s, j))
+        j = j + 1
+    j
+
+// The index past the number starting at `i`, or -1 when none starts
+// there.  A number is an optional sign, digits with an optional
+// fraction or a fraction alone, and an optional exponent.  It ends at
+// the first byte that cannot continue it, so `1.5.5` is `1.5` and `.5`.
+fn number_end(s: Str, i: Int) -> Int
+    var j = i
+    if byte_of(s, j) == '+' or byte_of(s, j) == '-'
+        j = j + 1
+    var digits = 0
+    while is_digit(byte_of(s, j))
+        j = j + 1
+        digits = digits + 1
+    if byte_of(s, j) == '.'
+        var k = j + 1
+        while is_digit(byte_of(s, k))
+            k = k + 1
+            digits = digits + 1
+        j = k
+    if digits == 0
+        return 0 - 1
+    if byte_of(s, j) == 'e' or byte_of(s, j) == 'E'
+        var k = j + 1
+        if byte_of(s, k) == '+' or byte_of(s, k) == '-'
+            k = k + 1
+        if is_digit(byte_of(s, k))
+            while is_digit(byte_of(s, k))
+                k = k + 1
+            j = k
+    j
+
+// The value of the number spelled at `[i, end)`.
+fn number_value(s: Str, i: Int, end: Int) -> Float
+    let start = if byte_of(s, i) == '+'
+        i + 1
+    else
+        i
+    str.to_float(str.slice(s, start, end)) ?? 0.0
+
+// The numbers of a list separated by whitespace and commas, and the
+// offset of the first byte that does not begin a number, or -1.
+struct NumScan
+    values: [Float]
+    bad: Int
+
+fn scan_numbers(s: Str) -> NumScan
+    var vs: [Float] = []
+    var i = skip_separators(s, 0)
+    let n = str.len(s)
+    while i < n
+        let end = number_end(s, i)
+        if end < 0
+            return NumScan { values: vs, bad: i }
+        list.push(vs, number_value(s, i, end))
+        i = skip_separators(s, end)
+    NumScan { values: vs, bad: 0 - 1 }
+
+// The unit a length suffix names, among those a length can carry
+// without knowing a font.
+fn unit_of(suffix: Str) -> ?SvgUnitKind
+    match suffix
+        ""   => Some(SvgUnitUser)
+        "px" => Some(SvgUnitPx)
+        "%"  => Some(SvgUnitPercent)
+        "pt" => Some(SvgUnitPt)
+        "mm" => Some(SvgUnitMm)
+        "cm" => Some(SvgUnitCm)
+        "in" => Some(SvgUnitIn)
+        _    => None
+
+// A length, with its faults placed at `base` plus their offset in `s`.
+fn length_at(s: Str, base: Int, name: Str) -> Result<SvgLength, SvgFault>
+    let t = str.trim(s)
+    let lead = leading_space(s)
+    let end = number_end(t, 0)
+    if end < 0
+        return Err(SvgBadNumber(base + lead, name, s))
+    let v = number_value(t, 0, end)
+    match unit_of(str.slice(t, end, str.len(t)))
+        Some(u) => Ok(SvgLength { value: v, unit: u })
+        None    => Err(SvgBadNumber(base + lead + end, name, s))
+
+// A length as user units.  A percentage is of `extent`, and `em` and
+// `ex` are of the font size, an `ex` taken as half an `em` as SVG 1.1
+// section 7.10 allows when the font is not known.
+fn length_value(s: Str, base: Int, name: Str, extent: Float,
+                font_size: Float) -> Result<Float, SvgFault>
+    let t = str.trim(s)
+    let lead = leading_space(s)
+    let end = number_end(t, 0)
+    if end < 0
+        return Err(SvgBadNumber(base + lead, name, s))
+    let v = number_value(t, 0, end)
+    let suffix = str.slice(t, end, str.len(t))
+    if suffix == "em"
+        return Ok(v * font_size)
+    if suffix == "ex"
+        return Ok(v * font_size / 2.0)
+    match unit_of(suffix)
+        Some(u) => Ok(svgstyle.to_user_units(SvgLength { value: v, unit: u }, extent))
+        None    => Err(SvgBadNumber(base + lead + end, name, s))
+
+fn view_box_at(s: Str, base: Int) -> Result<SvgViewBox, SvgFault>
+    let ns = scan_numbers(s)
+    if ns.bad >= 0
+        return Err(SvgBadViewBox(base + ns.bad, s))
+    if list.len(ns.values) != 4
+        return Err(SvgBadViewBox(base + leading_space(s), s))
+    Ok(svgdoc.view_box(ns.values[0], ns.values[1], ns.values[2], ns.values[3]))
+
+// Appends a dash pattern's lengths to `out`: nothing for `none`, or
+// lengths separated by whitespace and commas.
+fn dash_into(var out: [Float], s: Str, base: Int, extent: Float,
+             font_size: Float) -> Result<Unit, SvgFault>
+    if str.trim(s) == "none"
+        return Ok()
+    var i = skip_separators(s, 0)
+    let n = str.len(s)
+    while i < n
+        var j = i
+        while j < n and not is_space(byte_of(s, j)) and byte_of(s, j) != ','
+            j = j + 1
+        list.push(out, length_value(str.slice(s, i, j), base + i, "stroke-dasharray", extent,
+                                    font_size)!)
+        i = skip_separators(s, j)
+    Ok()
+
+// A `points` attribute as points.  A dangling odd number is dropped,
+// which is what SVG 1.1 section 9.7.1 says to render.
+fn points_from(s: Str, base: Int) -> Result<[GeomPointF], SvgFault>
+    let ns = scan_numbers(s)
+    if ns.bad >= 0
+        return Err(SvgBadNumber(base + ns.bad, "points", s))
+    var ps: [GeomPointF] = []
+    var i = 0
+    while i + 1 < list.len(ns.values)
+        list.push(ps, geompoint.ptf(ns.values[i], ns.values[i + 1]))
+        i = i + 2
+    Ok(ps)
+
+// A paint, or `None` for text that is not one.  `current` is the value
+// `currentColor` names.
+fn paint_from(s: Str, current: Srgba8) -> ?SvgPaint
+    let t = str.trim(s)
+    if t == "none"
+        return Some(SvgPaintNone)
+    if t == "currentColor"
+        return Some(SvgPaintColor(current))
+    if str.starts_with(t, "url(")
+        let close = str.index(t, ")") ?? 0
+        let inner = str.trim(str.slice(t, 4, close))
+        let bare = str.replace(str.replace(inner, "\"", ""), "'", "")
+        if close > 0 and str.starts_with(bare, "#") and str.len(bare) > 1
+            return Some(SvgPaintRef(str.slice(bare, 1, str.len(bare))))
+        return None
+    match colortext.parse(t)
+        Ok(c)  => Some(SvgPaintColor(c))
+        Err(_) => None
+
+// ---------------------------------------------------------------------
+// Path data, SVG 1.1 section 8.3.
+
+// The path reader's state: the text, where it is, the commands so far,
+// and what the next command needs from the ones before it.
+struct PathScan
+    d: Str
+    base: Int
+    var i: Int
+    var cmds: [SvgPathCmd]
+    var cx: Float
+    var cy: Float
+    var sx: Float
+    var sy: Float
+    var qx: Float
+    var qy: Float
+    var kind: Int
+
+// The text a path fault quotes: from `i` to the next separator.
+fn path_found(d: Str, i: Int) -> Str
+    var j = i + 1
+    while j < str.len(d) and not is_space(byte_of(d, j)) and byte_of(d, j) != ','
+        j = j + 1
+    str.slice(d, i, math.min(j, str.len(d)))
+
+fn path_fault(ps: PathScan, at: Int) -> SvgFault
+    SvgBadPathData(ps.base + at, path_found(ps.d, at))
+
+// The next number of a command's arguments.
+fn path_number(var ps: PathScan) -> Result<Float, SvgFault>
+    ps.i = skip_separators(ps.d, ps.i)
+    let end = number_end(ps.d, ps.i)
+    if end < 0
+        return Err(path_fault(ps, ps.i))
+    let v = number_value(ps.d, ps.i, end)
+    ps.i = end
+    Ok(v)
+
+// The next arc flag: a single `0` or `1`, which needs no separator
+// after it.
+fn path_flag(var ps: PathScan) -> Result<Bool, SvgFault>
+    ps.i = skip_separators(ps.d, ps.i)
+    let b = byte_of(ps.d, ps.i)
+    if b != '0' and b != '1'
+        return Err(path_fault(ps, ps.i))
+    ps.i = ps.i + 1
+    Ok(b == '1')
+
+fn is_command(b: Int) -> Bool
+    str.contains("MmLlHhVvCcSsQqTtAaZz", str.from_byte(b))
+
+// Pushes a command and moves the pen to its end.
+fn path_emit(var ps: PathScan, c: SvgPathCmd, x: Float, y: Float, kind: Int)
+    list.push(ps.cmds, c)
+    ps.cx = x
+    ps.cy = y
+    ps.kind = kind
+
+// Reads the arguments of one command `letter` and pushes it, absolute
+// and in its long form.
+fn path_command(var ps: PathScan, letter: Int) -> Result<Unit, SvgFault>
+    let rel = letter >= 'a'
+    let ox = if rel
+        ps.cx
+    else
+        0.0
+    let oy = if rel
+        ps.cy
+    else
+        0.0
+    let up = if rel
+        letter - 32
+    else
+        letter
+    if up == 'M'
+        let x = ox + path_number(ps)!
+        let y = oy + path_number(ps)!
+        path_emit(ps, SvgMoveTo(x, y), x, y, 0)
+        ps.sx = x
+        ps.sy = y
+    elif up == 'L'
+        let x = ox + path_number(ps)!
+        let y = oy + path_number(ps)!
+        path_emit(ps, SvgLineTo(x, y), x, y, 0)
+    elif up == 'H'
+        let x = ox + path_number(ps)!
+        path_emit(ps, SvgLineTo(x, ps.cy), x, ps.cy, 0)
+    elif up == 'V'
+        let y = oy + path_number(ps)!
+        path_emit(ps, SvgLineTo(ps.cx, y), ps.cx, y, 0)
+    elif up == 'C' or up == 'S'
+        var x1 = if ps.kind == 1
+            2.0 * ps.cx - ps.qx
+        else
+            ps.cx
+        var y1 = if ps.kind == 1
+            2.0 * ps.cy - ps.qy
+        else
+            ps.cy
+        if up == 'C'
+            x1 = ox + path_number(ps)!
+            y1 = oy + path_number(ps)!
+        let x2 = ox + path_number(ps)!
+        let y2 = oy + path_number(ps)!
+        let x = ox + path_number(ps)!
+        let y = oy + path_number(ps)!
+        path_emit(ps, SvgCubicTo(x1, y1, x2, y2, x, y), x, y, 1)
+        ps.qx = x2
+        ps.qy = y2
+    elif up == 'Q' or up == 'T'
+        var x1 = if ps.kind == 2
+            2.0 * ps.cx - ps.qx
+        else
+            ps.cx
+        var y1 = if ps.kind == 2
+            2.0 * ps.cy - ps.qy
+        else
+            ps.cy
+        if up == 'Q'
+            x1 = ox + path_number(ps)!
+            y1 = oy + path_number(ps)!
+        let x = ox + path_number(ps)!
+        let y = oy + path_number(ps)!
+        path_emit(ps, SvgQuadTo(x1, y1, x, y), x, y, 2)
+        ps.qx = x1
+        ps.qy = y1
+    elif up == 'A'
+        let rx = math.abs(path_number(ps)!)
+        let ry = math.abs(path_number(ps)!)
+        let rot = path_number(ps)! * math.pi() / 180.0
+        let large = path_flag(ps)!
+        let sweep = path_flag(ps)!
+        let x = ox + path_number(ps)!
+        let y = oy + path_number(ps)!
+        path_emit(ps, SvgArcTo(rx, ry, rot, large, sweep, x, y), x, y, 0)
+    else
+        path_emit(ps, SvgClosePath, ps.sx, ps.sy, 0)
+    Ok()
+
+// A path from `d`, with every fault placed at `base` plus its offset in
+// `d`.  The first command has to be a move; a command letter is
+// repeated for further arguments, and a move's extra arguments are
+// lines.
+fn path_from(d: Str, base: Int) -> Result<SvgPath, SvgFault>
+    var ps = PathScan { d: d, base: base, i: skip_separators(d, 0), cmds: [], cx: 0.0, cy: 0.0,
+                        sx: 0.0, sy: 0.0, qx: 0.0, qy: 0.0, kind: 0 }
+    let n = str.len(d)
+    var letter = 0
+    while ps.i < n
+        let b = byte_of(d, ps.i)
+        if is_command(b)
+            if letter == 0 and b != 'M' and b != 'm'
+                return Err(path_fault(ps, ps.i))
+            letter = b
+            ps.i = ps.i + 1
+        elif letter == 0 or letter == 'Z' or letter == 'z' or number_end(d, ps.i) < 0
+            return Err(path_fault(ps, ps.i))
+        path_command(ps, letter)!
+        if letter == 'M'
+            letter = 'L'
+        if letter == 'm'
+            letter = 'l'
+        ps.i = skip_separators(d, ps.i)
+    Ok(SvgPath { commands: ps.cmds })
+
+// ---------------------------------------------------------------------
+// Transforms, SVG 1.1 section 7.6.
+
+// The matrix of one transform function, or `None` when the name or the
+// argument count is not one SVG defines.
+fn transform_function(name: Str, a: [Float]) -> ?GeomXform
+    let n = list.len(a)
+    if name == "matrix" and n == 6
+        return Some(geomxform.of_matrix(a[0], a[1], a[2], a[3], a[4], a[5]))
+    if name == "translate" and (n == 1 or n == 2)
+        return Some(geomxform.translation(a[0], (if n == 2 then a[1] else 0.0)))
+    if name == "scale" and (n == 1 or n == 2)
+        return Some(geomxform.scaling(a[0], (if n == 2 then a[1] else a[0])))
+    if name == "rotate" and (n == 1 or n == 3)
+        let r = a[0] * math.pi() / 180.0
+        let turn = geomxform.of_matrix(math.cos(r), math.sin(r), 0.0 - math.sin(r), math.cos(r),
+                                       0.0, 0.0)
+        if n == 1
+            return Some(turn)
+        return Some(geomxform.compose(geomxform.compose(geomxform.translation(0.0 - a[1],
+                                                                             0.0 - a[2]),
+                                                        turn),
+                                      geomxform.translation(a[1], a[2])))
+    if name == "skewX" and n == 1
+        return Some(geomxform.of_matrix(1.0, 0.0, math.tan(a[0] * math.pi() / 180.0), 1.0, 0.0,
+                                        0.0))
+    if name == "skewY" and n == 1
+        return Some(geomxform.of_matrix(1.0, math.tan(a[0] * math.pi() / 180.0), 0.0, 1.0, 0.0,
+                                        0.0))
+    None
+
+fn is_letter(b: Int) -> Bool
+    b >= 'a' and b <= 'z' or b >= 'A' and b <= 'Z'
+
+// A transform list, composed so that the function written first is
+// applied last, which is what a list means (SVG 1.1 section 7.6).
+fn transform_from(s: Str, base: Int) -> Result<SvgTransform, SvgFault>
+    var acc = geomxform.identity()
+    var i = skip_separators(s, 0)
+    let n = str.len(s)
+    while i < n
+        let start = i
+        while is_letter(byte_of(s, i))
+            i = i + 1
+        let name = str.slice(s, start, i)
+        while is_space(byte_of(s, i))
+            i = i + 1
+        if name == "" or byte_of(s, i) != '('
+            return Err(SvgBadTransform(base + start, path_found(s, start)))
+        let close = str.index_from(s, ")", i) ?? 0 - 1
+        if close < 0
+            return Err(SvgBadTransform(base + start, name))
+        let ns = scan_numbers(str.slice(s, i + 1, close))
+        if ns.bad >= 0
+            return Err(SvgBadTransform(base + i + 1 + ns.bad, name))
+        match transform_function(name, ns.values)
+            Some(m) =>
+                acc = geomxform.compose(m, acc)
+            None    =>
+                return Err(SvgBadTransform(base + start, name))
+        i = skip_separators(s, close + 1)
+    Ok(svgdoc.of_xform(acc))
+
+// ---------------------------------------------------------------------
+// XML 1.0, as far as a document of shapes needs it: elements,
+// attributes, character data, the five predefined entities and
+// character references, CDATA sections, comments and processing
+// instructions.  A document type declaration is skipped; an entity it
+// declares is not defined here.
+
+// The scanner: the text, where it is, and the nesting limit.
+struct Scan
+    text: Str
+    var pos: Int
+    max_depth: Int
+
+// One attribute: its name, its value with references replaced, and the
+// offset of the value's first byte in the input.
+struct XAttr
+    name: Str
+    value: Str
+    at: Int
+
+// One element: its name, the offset of its `<`, its attributes and
+// what it contains.
+struct XElem
+    name: Str
+    at: Int
+    attrs: [XAttr]
+    kids: [XNode]
+
+// What an element contains: character data or another element.
+enum XNode
+    XText(text: Str)
+    XChild(el: XElem)
+
+fn byte(sc: Scan, i: Int) -> Int
+    byte_of(sc.text, i)
+
+fn at_text(sc: Scan, s: Str) -> Bool
+    let n = str.len(s)
+    if sc.pos + n > str.len(sc.text)
+        return false
+    str.slice(sc.text, sc.pos, sc.pos + n) == s
+
+fn skip_spaces(var sc: Scan) -> Bool
+    let start = sc.pos
+    while is_space(byte(sc, sc.pos))
+        sc.pos = sc.pos + 1
+    sc.pos > start
+
+// Moves past the next `term`; false, at the end of the text, when there
+// is none.
+fn skip_past(var sc: Scan, term: Str) -> Bool
+    match str.index_from(sc.text, term, sc.pos)
+        Some(i) =>
+            sc.pos = i + str.len(term)
+            true
+        None    =>
+            sc.pos = str.len(sc.text)
+            false
+
+// Moves past a document type declaration, internal subset and quoted
+// literals included; false when the text ends inside it.
+fn skip_doctype(var sc: Scan) -> Bool
+    var depth = 0
+    var quote = 0
+    let n = str.len(sc.text)
+    while sc.pos < n
+        let b = byte(sc, sc.pos)
+        sc.pos = sc.pos + 1
+        if quote != 0
+            if b == quote
+                quote = 0
+        elif b == '"' or b == '\''
+            quote = b
+        elif b == '['
+            depth = depth + 1
+        elif b == ']'
+            depth = depth - 1
+        elif b == '>' and depth <= 0
+            return true
+    false
+
+// Moves past whitespace, a byte order mark, processing instructions,
+// comments and a document type declaration; false when the text ends
+// inside one of them.
+fn skip_misc(var sc: Scan) -> Bool
+    var more = true
+    while more
+        skip_spaces(sc)
+        if at_text(sc, "\u{feff}")
+            sc.pos = sc.pos + 3
+        elif at_text(sc, "<?")
+            if not skip_past(sc, "?>")
+                return false
+        elif at_text(sc, "<!--")
+            if not skip_past(sc, "-->")
+                return false
+        elif at_text(sc, "<!DOCTYPE")
+            if not skip_doctype(sc)
+                return false
+        else
+            more = false
+    true
+
+fn is_name_byte(b: Int) -> Bool
+    is_letter(b) or is_digit(b) or b == '_' or b == ':' or b == '-' or b == '.' or b >= 128
+
+// The name at the scanner, or `""`.  A name does not start with a
+// digit, a hyphen or a full stop.
+fn read_name(var sc: Scan) -> Str
+    let start = sc.pos
+    let b = byte(sc, start)
+    if not is_name_byte(b) or is_digit(b) or b == '-' or b == '.'
+        return ""
+    while is_name_byte(byte(sc, sc.pos))
+        sc.pos = sc.pos + 1
+    str.slice(sc.text, start, sc.pos)
+
+// The text a tag fault quotes: from `at` up to whitespace or a `>`,
+// sixteen bytes at most.
+fn found_at(s: Str, at: Int) -> Str
+    var j = at + 1
+    while j < str.len(s) and j < at + 16 and not is_space(byte_of(s, j)) and byte_of(s, j) != '>'
+        j = j + 1
+    str.slice(s, at, math.min(j, str.len(s)))
+
+// The digits of a character reference as a number, or -1.
+fn reference_value(digits: Str, radix: Int) -> Int
+    if str.len(digits) == 0 or str.len(digits) > 8
+        return 0 - 1
+    var v = 0
+    for i in 0..str.len(digits)
+        let b = byte_of(digits, i)
+        var d = 0 - 1
+        if is_digit(b)
+            d = b - '0'
+        elif radix == 16 and b >= 'a' and b <= 'f'
+            d = b - 'a' + 10
+        elif radix == 16 and b >= 'A' and b <= 'F'
+            d = b - 'A' + 10
+        if d < 0
+            return 0 - 1
+        v = v * radix + d
+    v
+
+// The text an entity or character reference stands for, or `None`.
+fn entity_text(name: Str) -> ?Str
+    match name
+        "lt"   => Some("<")
+        "gt"   => Some(">")
+        "amp"  => Some("&")
+        "quot" => Some("\"")
+        "apos" => Some("'")
+        _      => character_reference(name)
+
+fn character_reference(name: Str) -> ?Str
+    if not str.starts_with(name, "#")
+        return None
+    let hex = str.starts_with(name, "#x")
+    let skip = if hex
+        2
+    else
+        1
+    let cp = reference_value(str.slice(name, skip, str.len(name)), (if hex then 16 else 10))
+    if cp <= 0 or cp > 1114111 or cp >= 55296 and cp <= 57343
+        return None
+    Some(str.from_char(cp))
+
+// Text with its references replaced.  `base` is the offset of the
+// text's first byte in the input, for the fault.
+fn decode(raw: Str, base: Int) -> Result<Str, SvgFault>
+    if not str.contains(raw, "&")
+        return Ok(raw)
+    var out = ""
+    var run = 0
+    var i = 0
+    let n = str.len(raw)
+    while i < n
+        if byte_of(raw, i) == '&'
+            var j = i + 1
+            while j < n and byte_of(raw, j) != ';' and (is_name_byte(byte_of(raw, j)) or byte_of(raw, j) == '#')
+                j = j + 1
+            let name = str.slice(raw, i + 1, j)
+            let rep = entity_text(name) ?? "\u{0}"
+            if byte_of(raw, j) != ';' or rep == "\u{0}"
+                return Err(SvgUnknownEntity(base + i, name))
+            out = out + str.slice(raw, run, i) + rep
+            i = j + 1
+            run = i
+        else
+            i = i + 1
+    Ok(out + str.slice(raw, run, n))
+
+fn has_attr(attrs: [XAttr], name: Str) -> Bool
+    list.any(attrs, a => a.name == name)
+
+// One attribute, the scanner at its name.
+fn attribute(var sc: Scan, element: Str) -> Result<XAttr, SvgFault>
+    let at = sc.pos
+    let n = str.len(sc.text)
+    let name = read_name(sc)
+    skip_spaces(sc)
+    if name == "" or byte(sc, sc.pos) != '='
+        return Err((if sc.pos >= n then SvgTruncated(n) else SvgMalformedAttribute(at, element)))
+    sc.pos = sc.pos + 1
+    skip_spaces(sc)
+    let q = byte(sc, sc.pos)
+    if q != '"' and q != '\''
+        return Err((if sc.pos >= n then SvgTruncated(n) else SvgMalformedAttribute(at, element)))
+    let start = sc.pos + 1
+    let close = str.index_from(sc.text, str.from_byte(q), start) ?? 0 - 1
+    if close < 0
+        return Err(SvgTruncated(n))
+    let raw = str.slice(sc.text, start, close)
+    if str.contains(raw, "<")
+        return Err(SvgMalformedAttribute(at, element))
+    sc.pos = close + 1
+    Ok(XAttr { name: name, value: decode(raw, start)!, at: start })
+
+// One element, the scanner at its `<`, at nesting `depth`.
+fn element(var sc: Scan, depth: Int) -> Result<XElem, SvgFault>
+    let at = sc.pos
+    let n = str.len(sc.text)
+    if depth > sc.max_depth
+        return Err(SvgTooDeep(at, sc.max_depth))
+    sc.pos = sc.pos + 1
+    let name = read_name(sc)
+    if name == ""
+        return Err(SvgMalformedTag(at, found_at(sc.text, at)))
+    var attrs: [XAttr] = []
+    var open = true
+    while open
+        let spaced = skip_spaces(sc)
+        let b = byte(sc, sc.pos)
+        if b < 0
+            return Err(SvgTruncated(n))
+        if b == '>'
+            sc.pos = sc.pos + 1
+            open = false
+        elif b == '/'
+            if byte(sc, sc.pos + 1) != '>'
+                return Err(SvgMalformedTag(sc.pos, found_at(sc.text, sc.pos)))
+            sc.pos = sc.pos + 2
+            return Ok(XElem { name: name, at: at, attrs: attrs, kids: [] })
+        else
+            let a_at = sc.pos
+            let a = attribute(sc, name)!
+            if not spaced or has_attr(attrs, a.name)
+                return Err(SvgMalformedAttribute(a_at, name))
+            list.push(attrs, a)
+    Ok(XElem { name: name, at: at, attrs: attrs, kids: content(sc, name, depth)! })
+
+// The content of element `name` up to and including its closing tag.
+fn content(var sc: Scan, name: Str, depth: Int) -> Result<[XNode], SvgFault>
+    var kids: [XNode] = []
+    let n = str.len(sc.text)
+    var open = true
+    while open
+        if sc.pos >= n
+            return Err(SvgTruncated(n))
+        if at_text(sc, "</")
+            let close_at = sc.pos
+            sc.pos = sc.pos + 2
+            let closed = read_name(sc)
+            skip_spaces(sc)
+            if byte(sc, sc.pos) != '>'
+                if sc.pos >= n
+                    return Err(SvgTruncated(n))
+                return Err(SvgMalformedTag(close_at, found_at(sc.text, close_at)))
+            sc.pos = sc.pos + 1
+            if closed != name
+                return Err(SvgMismatchedTag(close_at, name, closed))
+            open = false
+        elif at_text(sc, "<!--")
+            if not skip_past(sc, "-->")
+                return Err(SvgTruncated(n))
+        elif at_text(sc, "<![CDATA[")
+            let start = sc.pos + 9
+            if not skip_past(sc, "]]>")
+                return Err(SvgTruncated(n))
+            list.push(kids, XText(str.slice(sc.text, start, sc.pos - 3)))
+        elif at_text(sc, "<?")
+            if not skip_past(sc, "?>")
+                return Err(SvgTruncated(n))
+        elif at_text(sc, "<!")
+            return Err(SvgMalformedTag(sc.pos, found_at(sc.text, sc.pos)))
+        elif at_text(sc, "<")
+            list.push(kids, XChild(element(sc, depth + 1)!))
+        else
+            let start = sc.pos
+            let next = str.index_from(sc.text, "<", start) ?? n
+            list.push(kids, XText(decode(str.slice(sc.text, start, next), start)!))
+            sc.pos = next
+    Ok(kids)
+
+// Every top-level element of the input.  Character data between them
+// is not part of any element and is passed over.
+fn top_elements(var sc: Scan) -> Result<[XElem], SvgFault>
+    var tops: [XElem] = []
+    let n = str.len(sc.text)
+    while sc.pos < n
+        if not skip_misc(sc)
+            return Err(SvgTruncated(n))
+        if at_text(sc, "<")
+            list.push(tops, element(sc, 1)!)
+        elif sc.pos < n
+            sc.pos = str.index_from(sc.text, "<", sc.pos) ?? n
+    Ok(tops)
+
+// The first `svg` element in document order.
+fn find_svg(els: [XElem]) -> ?XElem
+    for el in els
+        if el.name == "svg"
+            return Some(el)
+        let found = find_svg(child_elements(el))
+        if found != None
+            return found
+    None
+
+fn child_elements(el: XElem) -> [XElem]
+    var out: [XElem] = []
+    for k in el.kids
+        if let XChild(c) = k
+            list.push(out, c)
+    out
+
+fn attr_of(el: XElem, name: Str) -> ?XAttr
+    list.find(el.attrs, a => a.name == name)
+
+// ---------------------------------------------------------------------
+// From elements to a document.
+
+// What a parse has skipped so far.
+struct Tally
+    var elements: Int
+    var attributes: Int
+    var names: [Str]
+    var dangling: Bool
+
+// How many skipped element names a report keeps.
+fn kept_names() -> Int
+    8
+
+fn skip_element(var t: Tally, name: Str)
+    t.elements = t.elements + 1
+    if list.len(t.names) < kept_names()
+        list.push(t.names, name)
+
+// The presentation attributes as a reader holds them at one element:
+// the inherited ones as its parent left them or as it sets them, and
+// the element's own opacity, which does not inherit.  `color` is kept
+// for `currentColor`.
+struct Inh
+    var fill: SvgPaint
+    var fill_opacity: Float
+    var stroke: SvgPaint
+    var stroke_opacity: Float
+    var stroke_width: Float
+    var cap: SvgLineCap
+    var join: SvgLineJoin
+    var miter: Float
+    var dash: [Float]
+    var dash_offset: Float
+    var fill_rule: GeomFillRule
+    var family: Str
+    var size: Float
+    var weight: Int
+    var italic: Bool
+    var anchor: SvgTextAnchor
+    var color: Srgba8
+    var opacity: Float
+
+// SVG's initial values.
+fn initial_inh() -> Inh
+    let p = svgstyle.plain()
+    Inh { fill: p.fill, fill_opacity: 1.0, stroke: p.stroke, stroke_opacity: 1.0,
+          stroke_width: p.stroke_width, cap: p.stroke_cap, join: p.stroke_join,
+          miter: p.miter_limit, dash: [], dash_offset: p.stroke_dash_offset,
+          fill_rule: p.fill_rule, family: p.font.family, size: p.font.size,
+          weight: p.font.weight, italic: p.font.italic, anchor: p.text_anchor,
+          color: srgb.opaque(srgb.black()), opacity: 1.0 }
+
+// What a child starts from: everything its parent holds, except the
+// opacity.
+fn inherit(h: Inh) -> Inh
+    Inh { fill: h.fill, fill_opacity: h.fill_opacity, stroke: h.stroke,
+          stroke_opacity: h.stroke_opacity, stroke_width: h.stroke_width, cap: h.cap,
+          join: h.join, miter: h.miter, dash: list.clone(h.dash), dash_offset: h.dash_offset,
+          fill_rule: h.fill_rule, family: h.family, size: h.size, weight: h.weight,
+          italic: h.italic, anchor: h.anchor, color: h.color, opacity: 1.0 }
+
+// The viewport a percentage is taken of.
+@value
+struct Ctx
+    vw: Float
+    vh: Float
+
+// The extent a percentage of a length that is neither horizontal nor
+// vertical is taken of (SVG 1.1 section 7.10).
+fn diagonal(c: Ctx) -> Float
+    math.sqrt((c.vw * c.vw + c.vh * c.vh) / 2.0)
+
+fn unit_interval(v: Float) -> Float
+    math.max(0.0, math.min(1.0, v))
+
+fn plain_number(p: XAttr) -> Result<Float, SvgFault>
+    let t = str.trim(p.value)
+    let end = number_end(t, 0)
+    if end < 0 or end != str.len(t)
+        return Err(SvgBadNumber(p.at + leading_space(p.value), p.name, p.value))
+    Ok(number_value(t, 0, end))
+
+// A `font-weight`, given the parent's.  `bolder` and `lighter` follow
+// the table in CSS Fonts 3 section 3.2; any other keyword answers -1.
+fn weight_of(v: Str, parent: Int) -> Int
+    if v == "normal"
+        return 400
+    if v == "bold"
+        return 700
+    if v == "bolder"
+        return if parent < 400 then 400 elif parent < 600 then 700 else 900
+    if v == "lighter"
+        return if parent < 600 then 100 elif parent < 800 then 400 else 700
+    str.to_int(v) ?? 0 - 1
+
+// Applies one presentation attribute or style declaration.  A number
+// that is not one is a fault; a keyword or a colour this reader does
+// not know leaves the value as it was and is counted as skipped.
+fn apply_prop(var h: Inh, p: XAttr, ctx: Ctx, var t: Tally) -> Result<Unit, SvgFault>
+    let v = str.trim(p.value)
+    if v == "inherit"
+        return Ok()
+    let known = apply_keyword(h, p.name, v)
+    if known == 1
+        return Ok()
+    if known == 0
+        t.attributes = t.attributes + 1
+        return Ok()
+    match p.name
+        "fill-opacity"      =>
+            h.fill_opacity = unit_interval(plain_number(p)!)
+        "stroke-opacity"    =>
+            h.stroke_opacity = unit_interval(plain_number(p)!)
+        "opacity"           =>
+            h.opacity = unit_interval(plain_number(p)!)
+        "stroke-miterlimit" =>
+            h.miter = plain_number(p)!
+        "stroke-width"      =>
+            h.stroke_width = length_value(p.value, p.at, p.name, diagonal(ctx),
+                                                              h.size)!
+        "stroke-dashoffset" =>
+            h.dash_offset = length_value(p.value, p.at, p.name, diagonal(ctx),
+                                                             h.size)!
+        "stroke-dasharray"  =>
+            var pattern: [Float] = []
+            dash_into(pattern, p.value, p.at, diagonal(ctx), h.size)!
+            h.dash = pattern
+        "font-size"         =>
+            h.size = length_value(p.value, p.at, p.name, h.size * 100.0, h.size)!
+        _                   =>
+            t.attributes = t.attributes + 1
+    Ok()
+
+// Applies an attribute whose value is a keyword, a colour or a name.
+// Answers 1 when it applied, 0 when the value was not one the
+// attribute takes, and -1 when the attribute is not one of these.
+fn apply_keyword(var h: Inh, name: Str, v: Str) -> Int
+    if name == "fill" or name == "stroke" or name == "color"
+        return apply_colour(h, name, v)
+    if name == "stroke-linecap"
+        match v
+            "butt"   =>
+                h.cap = SvgCapButt
+            "round"  =>
+                h.cap = SvgCapRound
+            "square" =>
+                h.cap = SvgCapSquare
+            _        =>
+                return 0
+        return 1
+    if name == "stroke-linejoin"
+        match v
+            "miter" =>
+                h.join = SvgJoinMiter
+            "round" =>
+                h.join = SvgJoinRound
+            "bevel" =>
+                h.join = SvgJoinBevel
+            _       =>
+                return 0
+        return 1
+    if name == "fill-rule"
+        match v
+            "nonzero" =>
+                h.fill_rule = GeomNonZero
+            "evenodd" =>
+                h.fill_rule = GeomEvenOdd
+            _         =>
+                return 0
+        return 1
+    if name == "text-anchor"
+        match v
+            "start"  =>
+                h.anchor = SvgAnchorStart
+            "middle" =>
+                h.anchor = SvgAnchorMiddle
+            "end"    =>
+                h.anchor = SvgAnchorEnd
+            _        =>
+                return 0
+        return 1
+    if name == "font-style"
+        match v
+            "normal"  =>
+                h.italic = false
+            "italic"  =>
+                h.italic = true
+            "oblique" =>
+                h.italic = true
+            _         =>
+                return 0
+        return 1
+    if name == "font-family"
+        h.family = v
+        return 1
+    if name == "font-weight"
+        let w = weight_of(v, h.weight)
+        if w < 1 or w > 1000
+            return 0
+        h.weight = w
+        return 1
+    0 - 1
+
+fn apply_colour(var h: Inh, name: Str, v: Str) -> Int
+    let Some(paint) = paint_from(v, h.color) else return 0
+    if name == "fill"
+        h.fill = paint
+    elif name == "stroke"
+        h.stroke = paint
+    else
+        match paint
+            SvgPaintColor(c) =>
+                h.color = c
+            _                =>
+                return 0
+    1
+
+// The declarations of a `style` attribute as attributes, each placed at
+// its value's offset in the input.
+fn style_declarations(a: XAttr) -> [XAttr]
+    var out: [XAttr] = []
+    var start = 0
+    for part in str.split(a.value, ";")
+        let colon = str.index(part, ":") ?? 0 - 1
+        if colon > 0
+            let name = str.trim(str.slice(part, 0, colon))
+            let value = str.slice(part, colon + 1, str.len(part))
+            list.push(out, XAttr { name: name, value: value, at: a.at + start + colon + 1 })
+        start = start + str.len(part) + 1
+    out
+
+fn is_presentation(name: Str) -> Bool
+    list.contains(["fill", "fill-opacity", "fill-rule", "stroke", "stroke-opacity",
+                   "stroke-width", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit",
+                   "stroke-dasharray", "stroke-dashoffset", "font-family", "font-size",
+                   "font-weight", "font-style", "text-anchor", "opacity", "color"],
+                   name)
+
+// The geometry attributes an element this reader models takes, or
+// `None` for an element it skips.
+fn geometry_names(name: Str) -> ?[Str]
+    match name
+        "g"        => Some([])
+        "rect"     => Some(["x", "y", "width", "height", "rx", "ry"])
+        "circle"   => Some(["cx", "cy", "r"])
+        "ellipse"  => Some(["cx", "cy", "rx", "ry"])
+        "line"     => Some(["x1", "y1", "x2", "y2"])
+        "polyline" => Some(["points"])
+        "polygon"  => Some(["points"])
+        "path"     => Some(["d"])
+        "text"     => Some(["x", "y"])
+        _          => None
+
+// The presentation state at an element, from its parent's.  Attributes
+// apply first and the `style` attribute's declarations after them,
+// which is the precedence SVG 1.1 section 6.4 gives.  `color` applies
+// before the rest, so that a `currentColor` on the same element names
+// it.  An attribute the element does not take is counted as skipped.
+fn element_inh(el: XElem, parent: Inh, ctx: Ctx, var t: Tally,
+               geometry: [Str]) -> Result<Inh, SvgFault>
+    var h = inherit(parent)
+    var props: [XAttr] = []
+    var declared: [XAttr] = []
+    for a in el.attrs
+        if is_presentation(a.name)
+            list.push(props, a)
+        elif a.name == "style"
+            list.append(declared, style_declarations(a))
+        elif not (a.name == "id" or a.name == "transform" or a.name == "xmlns"
+                  or str.starts_with(a.name, "xmlns:") or list.contains(geometry, a.name))
+            t.attributes = t.attributes + 1
+    let all = list.concat(props, declared)
+    for p in list.filter(all, a => a.name == "color")
+        apply_prop(h, p, ctx, t)!
+    for p in list.filter(all, a => a.name != "color")
+        apply_prop(h, p, ctx, t)!
+    Ok(h)
+
+// A paint with an opacity folded into its colour's alpha.
+fn with_coverage(p: SvgPaint, opacity: Float) -> SvgPaint
+    match p
+        SvgPaintColor(c) =>
+            let a = math.round(c.a as Float * opacity) as Int
+            SvgPaintColor(Srgba8 { rgb: c.rgb, a: a })
+        _                => p
+
+fn is_ref(p: SvgPaint) -> Bool
+    match p
+        SvgPaintRef(_) => true
+        _              => false
+
+// The absolute style an element renders with.
+fn style_of(h: Inh, var t: Tally) -> SvgStyle
+    if is_ref(h.fill) or is_ref(h.stroke)
+        t.dangling = true
+    SvgStyle { fill: with_coverage(h.fill, h.fill_opacity),
+               stroke: with_coverage(h.stroke, h.stroke_opacity),
+               stroke_width: h.stroke_width, stroke_cap: h.cap, stroke_join: h.join,
+               miter_limit: h.miter, stroke_dash: list.clone(h.dash),
+               stroke_dash_offset: h.dash_offset, opacity: h.opacity, fill_rule: h.fill_rule,
+               font: svgstyle.font(h.family, h.size, h.weight, h.italic),
+               text_anchor: h.anchor }
+
+// A length attribute of an element as user units, or zero when it is
+// absent, which is SVG's initial value for every geometry attribute.
+fn length_attr(el: XElem, name: Str, extent: Float, font_size: Float) -> Result<Float, SvgFault>
+    match attr_of(el, name)
+        Some(a) => length_value(a.value, a.at, name, extent, font_size)
+        None    => Ok(0.0)
+
+// The first length of a list-valued `x` or `y` on a text element.
+fn first_length(el: XElem, name: Str, extent: Float, font_size: Float) -> Result<Float, SvgFault>
+    match attr_of(el, name)
+        Some(a) =>
+            let first = str.trim(a.value)
+            var end = 0
+            while end < str.len(first) and not is_space(byte_of(first, end)) and byte_of(first, end) != ','
+                end = end + 1
+            length_value(str.slice(first, 0, end), a.at + leading_space(a.value), name, extent,
+                         font_size)
+        None    => Ok(0.0)
+
+// A text run's character data, with every element inside it counted
+// as skipped and its text kept.
+fn text_of(el: XElem, var t: Tally) -> Str
+    var out = ""
+    for k in el.kids
+        match k
+            XText(s)  =>
+                out = out + s
+            XChild(c) =>
+                skip_element(t, c.name)
+                out = out + text_of(c, t)
+    out
+
+// Text with SVG 1.1's default white-space handling (section 10.15):
+// newlines removed, tabs as spaces, the ends trimmed and runs of spaces
+// collapsed to one.
+fn collapse_space(s: Str) -> Str
+    let flat = str.replace(str.replace(str.replace(s, "\r", ""), "\n", ""), "\t", " ")
+    str.join(list.filter(str.split(flat, " "), w => w != ""), " ")
+
+// A rectangle's corner radii.  A missing radius takes the other one's
+// value (SVG 1.1 section 9.2).
+fn radii(el: XElem, ctx: Ctx, fs: Float) -> Result<(Float, Float), SvgFault>
+    let has_rx = attr_of(el, "rx") != None
+    let has_ry = attr_of(el, "ry") != None
+    let rx = length_attr(el, "rx", ctx.vw, fs)!
+    let ry = length_attr(el, "ry", ctx.vh, fs)!
+    if has_rx and not has_ry
+        return Ok((rx, rx))
+    if has_ry and not has_rx
+        return Ok((ry, ry))
+    Ok((rx, ry))
+
+// The shape an element this reader models draws.
+fn shape_of(el: XElem, h: Inh, ctx: Ctx, var t: Tally) -> Result<SvgShape, SvgFault>
+    let size = h.size
+    let w = ctx.vw
+    let v = ctx.vh
+    match el.name
+        "rect"     =>
+            let (rx, ry) = radii(el, ctx, size)!
+            Ok(SvgRectShape(length_attr(el, "x", w, size)!, length_attr(el, "y", v, size)!,
+                            length_attr(el, "width", w, size)!, length_attr(el, "height", v, size)!,
+                            rx, ry))
+        "circle"   => Ok(SvgCircleShape(length_attr(el, "cx", w, size)!,
+                                        length_attr(el, "cy", v, size)!,
+                                        length_attr(el, "r", diagonal(ctx), size)!))
+        "ellipse"  => Ok(SvgEllipseShape(length_attr(el, "cx", w, size)!,
+                                         length_attr(el, "cy", v, size)!,
+                                         length_attr(el, "rx", w, size)!,
+                                         length_attr(el, "ry", v, size)!))
+        "line"     => Ok(SvgLineShape(length_attr(el, "x1", w, size)!, length_attr(el, "y1", v, size)!,
+                                      length_attr(el, "x2", w, size)!, length_attr(el, "y2", v, size)!))
+        "polyline" => Ok(SvgPolylineShape(points_attr(el)!))
+        "polygon"  => Ok(SvgPolygonShape(points_attr(el)!))
+        "path"     =>
+            match attr_of(el, "d")
+                Some(a) => Ok(SvgPathShape(path_from(a.value, a.at)!))
+                None    => Ok(SvgPathShape(svgpath.empty()))
+        "text"     => Ok(SvgTextShape(collapse_space(text_of(el, t)),
+                                      first_length(el, "x", w, size)!,
+                                      first_length(el, "y", v, size)!))
+        _          => Ok(SvgGroupShape)
+
+fn points_attr(el: XElem) -> Result<[GeomPointF], SvgFault>
+    match attr_of(el, "points")
+        Some(a) => points_from(a.value, a.at)
+        None    => Ok([])
+
+// One element as a node, or `None` for an element this reader skips.
+fn node_of(el: XElem, parent: Inh, ctx: Ctx, var t: Tally) -> Result<?SvgNode, SvgFault>
+    let known = geometry_names(el.name)
+    if known == None
+        skip_element(t, el.name)
+        return Ok(None)
+    let geometry = known ?? []
+    let h = element_inh(el, parent, ctx, t, geometry)!
+    let style = style_of(h, t)
+    let transform = transform_of(el)!
+    let id = match attr_of(el, "id")
+        Some(a) => a.value
+        None    => ""
+    let shape = shape_of(el, h, ctx, t)!
+    let kids = children_of(el, shape, h, ctx, t)!
+    Ok(Some(SvgNode { shape: shape, style: style, transform: transform, id: id,
+                      children: kids }))
+
+// An element's `transform`, or no transform when it has none.
+fn transform_of(el: XElem) -> Result<SvgTransform, SvgFault>
+    match attr_of(el, "transform")
+        Some(a) => transform_from(a.value, a.at)
+        None    => Ok(svgdoc.no_transform())
+
+// The children of a node: a group's are nodes, a text run's have
+// become its text, and any element inside another shape is skipped.
+fn children_of(el: XElem, shape: SvgShape, h: Inh, ctx: Ctx,
+               var t: Tally) -> Result<[SvgNode], SvgFault>
+    match shape
+        SvgGroupShape         => nodes_of(el, h, ctx, t)
+        SvgTextShape(_, _, _) => Ok([])
+        _                     =>
+            for c in child_elements(el)
+                skip_element(t, c.name)
+            Ok([])
+
+// The nodes of an element's children.
+fn nodes_of(el: XElem, h: Inh, ctx: Ctx, var t: Tally) -> Result<[SvgNode], SvgFault>
+    var out: [SvgNode] = []
+    for c in child_elements(el)
+        if let Some(n) = node_of(c, h, ctx, t)!
+            list.push(out, n)
+    Ok(out)
+
+// The root's `width` or `height`: `100%` when it is absent, which is
+// SVG's initial value.
+fn root_length(root: XElem, name: Str) -> Result<SvgLength, SvgFault>
+    match attr_of(root, name)
+        Some(a) => length_at(a.value, a.at, name)
+        None    => Ok(svgstyle.percent(100.0))
+
+// The root's view box.  Without a `viewBox` a user unit is a pixel, so
+// the view box is the viewport's own size, which is unknown and written
+// as zero when the size is a percentage.
+fn root_view_box(root: XElem, w: SvgLength, h: SvgLength) -> Result<SvgViewBox, SvgFault>
+    match attr_of(root, "viewBox")
+        Some(a) => view_box_at(a.value, a.at)
+        None    =>
+            if w.unit == SvgUnitPercent or h.unit == SvgUnitPercent
+                return Ok(svgdoc.view_box(0.0, 0.0, 0.0, 0.0))
+            Ok(svgdoc.view_box(0.0, 0.0, svgstyle.to_user_units(w, 0.0),
+                               svgstyle.to_user_units(h, 0.0)))
+
+// The document in `text`, and what reading it skipped.
+fn read_document(text: Str, max_depth: Int) -> Result<SvgReadReport, SvgFault>
+    var sc = Scan { text: text, pos: 0, max_depth: max_depth }
+    let tops = top_elements(sc)!
+    let root = find_svg(tops) ?? XElem { name: "", at: 0, attrs: [], kids: [] }
+    if root.name == ""
+        return Err(SvgNoRootElement(0))
+    var t = Tally { elements: 0, attributes: 0, names: [], dangling: false }
+    let w = root_length(root, "width")!
+    let h = root_length(root, "height")!
+    let vb = root_view_box(root, w, h)!
+    let ctx = Ctx { vw: vb.width, vh: vb.height }
+    let inh = element_inh(root, initial_inh(), ctx, t, ["width", "height", "viewBox"])!
+    let kids = nodes_of(root, inh, ctx, t)!
+    Ok(SvgReadReport { document: svgdoc.document_with(w, h, vb, kids),
+                       skipped_elements: t.elements, skipped_attributes: t.attributes,
+                       skipped_names: t.names, has_dangling_paint: t.dangling })

@@ -101,4 +101,15 @@ impl Error for SvgFault
 //     println("${svgfault.offset_of(SvgNoRootElement(0))}")
 // ```
 pub fn offset_of(f: SvgFault) -> Int
-    todo("svg-nv.svgfault.offset_of")
+    match f
+        SvgTruncated(at)             => at
+        SvgMalformedTag(at, _)       => at
+        SvgMismatchedTag(at, _, _)   => at
+        SvgMalformedAttribute(at, _) => at
+        SvgBadNumber(at, _, _)       => at
+        SvgBadPathData(at, _)        => at
+        SvgBadTransform(at, _)       => at
+        SvgBadViewBox(at, _)         => at
+        SvgNoRootElement(at)         => at
+        SvgUnknownEntity(at, _)      => at
+        SvgTooDeep(at, _)            => at
