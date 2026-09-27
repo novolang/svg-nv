@@ -228,9 +228,7 @@ pub fn parse_paint(s: Str) -> Result<SvgPaint, SvgFault>
 //         Err(_) => println("refused")
 // ```
 pub fn parse_dash_array(s: Str) -> Result<[Float], SvgFault>
-    var out: [Float] = []
-    dash_into(out, s, 0, 0.0, 0.0)!
-    Ok(out)
+    dash_from(s, 0, 0.0, 0.0)
 
 // Whether the text looks like an SVG document: its first element, after
 // any declaration, comments and document type, is `svg`.
@@ -398,19 +396,19 @@ fn view_box_at(s: Str, base: Int) -> Result<SvgViewBox, SvgFault>
         return Err(SvgBadViewBox(base + leading_space(s), s))
     Ok(svgdoc.view_box(ns.values[0], ns.values[1], ns.values[2], ns.values[3]))
 
-// Appends a dash pattern's lengths to `out`: nothing for `none`, or
-// lengths separated by whitespace and commas.
-fn dash_into(var out: [Float], s: Str, base: Int, extent: Float,
-             font_size: Float) -> Result<Unit, SvgFault>
+// A dash pattern's lengths: none for `none`, or lengths separated by
+// whitespace and commas.
+fn dash_from(s: Str, base: Int, extent: Float, font_size: Float) -> Result<[Float], SvgFault>
+    var out: [Float] = []
     if str.trim(s) == "none"
-        return Ok()
+        return Ok(out)
     var i = skip_separators(s, 0)
     while byte_of(s, i) >= 0
         let j = token_end(s, i)
         list.push(out, length_value(str.slice(s, i, j), base + i, "stroke-dasharray", extent,
                                     font_size)!)
         i = skip_separators(s, j)
-    Ok()
+    Ok(out)
 
 // A `points` attribute as points.  A dangling odd number is dropped,
 // which is what SVG 1.1 section 9.7.1 says to render.
@@ -1121,9 +1119,7 @@ fn apply_prop(var h: Inh, p: XAttr, ctx: Ctx, var t: Tally) -> Result<Unit, SvgF
             h.dash_offset = length_value(p.value, p.at, p.name, diagonal(ctx),
                                                              h.size)!
         "stroke-dasharray"  =>
-            var pattern: [Float] = []
-            dash_into(pattern, p.value, p.at, diagonal(ctx), h.size)!
-            h.dash = pattern
+            h.dash = dash_from(p.value, p.at, diagonal(ctx), h.size)!
         "font-size"         =>
             h.size = length_value(p.value, p.at, p.name, h.size * 100.0, h.size)!
         _                   =>
