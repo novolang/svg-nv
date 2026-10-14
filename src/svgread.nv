@@ -288,11 +288,11 @@ fn leading_space(s: Str) -> Int
         j = j + 1
     j
 
-// The index past the number starting at `i`, or -1 when none starts
+// The index past the number starting at `i`, or `None` when none starts
 // there.  A number is an optional sign, digits with an optional
 // fraction or a fraction alone, and an optional exponent.  It ends at
 // the first byte that cannot continue it, so `1.5.5` is `1.5` and `.5`.
-fn number_end(s: Str, i: Int) -> Int
+fn number_end(s: Str, i: Int) -> ?Int
     var j = i
     if byte_of(s, j) == '+' or byte_of(s, j) == '-'
         j = j + 1
@@ -307,7 +307,7 @@ fn number_end(s: Str, i: Int) -> Int
             digits = digits + 1
         j = k
     if digits == 0
-        return 0 - 1
+        return None
     if byte_of(s, j) == 'e' or byte_of(s, j) == 'E'
         var k = j + 1
         if byte_of(s, k) == '+' or byte_of(s, k) == '-'
@@ -316,7 +316,7 @@ fn number_end(s: Str, i: Int) -> Int
             while is_digit(byte_of(s, k))
                 k = k + 1
             j = k
-    j
+    Some(j)
 
 // The value of the number spelled at `[i, end)`.
 fn number_value(s: Str, i: Int, end: Int) -> Float
@@ -327,21 +327,20 @@ fn number_value(s: Str, i: Int, end: Int) -> Float
     str.to_float(str.slice(s, start, end)) ?? 0.0
 
 // The numbers of a list separated by whitespace and commas, and the
-// offset of the first byte that does not begin a number, or -1.
+// offset of the first byte that does not begin a number, or `None`.
 struct NumScan
     values: [Float]
-    bad: Int
+    bad: ?Int
 
 fn scan_numbers(s: Str) -> NumScan
     var vs: [Float] = []
     var i = skip_separators(s, 0)
     while byte_of(s, i) >= 0
-        let end = number_end(s, i)
-        if end < 0
-            return NumScan { values: vs, bad: i }
+        let Some(end) = number_end(s, i) else
+            return NumScan { values: vs, bad: Some(i) }
         list.push(vs, number_value(s, i, end))
         i = skip_separators(s, end)
-    NumScan { values: vs, bad: 0 - 1 }
+    NumScan { values: vs, bad: None }
 
 // The unit a length suffix names, among those a length can carry
 // without knowing a font.
@@ -360,8 +359,7 @@ fn unit_of(suffix: Str) -> ?SvgUnitKind
 fn length_at(s: Str, base: Int, name: Str) -> Result<SvgLength, SvgFault>
     let t = str.trim(s)
     let lead = leading_space(s)
-    let end = number_end(t, 0)
-    if end < 0
+    let Some(end) = number_end(t, 0) else
         return Err(SvgBadNumber(base + lead, name, s))
     let v = number_value(t, 0, end)
     match unit_of(str.slice(t, end, str.len(t)))
@@ -375,8 +373,7 @@ fn length_value(s: Str, base: Int, name: Str, extent: Float,
                 font_size: Float) -> Result<Float, SvgFault>
     let t = str.trim(s)
     let lead = leading_space(s)
-    let end = number_end(t, 0)
-    if end < 0
+    let Some(end) = number_end(t, 0) else
         return Err(SvgBadNumber(base + lead, name, s))
     let v = number_value(t, 0, end)
     let suffix = str.slice(t, end, str.len(t))
@@ -390,8 +387,8 @@ fn length_value(s: Str, base: Int, name: Str, extent: Float,
 
 fn view_box_at(s: Str, base: Int) -> Result<SvgViewBox, SvgFault>
     let ns = scan_numbers(s)
-    if ns.bad >= 0
-        return Err(SvgBadViewBox(base + ns.bad, s))
+    if let Some(bad) = ns.bad
+        return Err(SvgBadViewBox(base + bad, s))
     if list.len(ns.values) != 4
         return Err(SvgBadViewBox(base + leading_space(s), s))
     Ok(svgdoc.view_box(ns.values[0], ns.values[1], ns.values[2], ns.values[3]))
@@ -414,8 +411,8 @@ fn dash_from(s: Str, base: Int, extent: Float, font_size: Float) -> Result<[Floa
 // which is what SVG 1.1 section 9.7.1 says to render.
 fn points_from(s: Str, base: Int) -> Result<[GeomPointF], SvgFault>
     let ns = scan_numbers(s)
-    if ns.bad >= 0
-        return Err(SvgBadNumber(base + ns.bad, "points", s))
+    if let Some(bad) = ns.bad
+        return Err(SvgBadNumber(base + bad, "points", s))
     var ps: [GeomPointF] = []
     var i = 0
     while i + 1 < list.len(ns.values)
@@ -445,6 +442,13 @@ fn paint_from(s: Str, current: Srgba8) -> ?SvgPaint
 // ---------------------------------------------------------------------
 // Path data, SVG 1.1 section 8.3.
 
+// What the last path command was, for the smooth curves that reflect
+// its control point.
+enum PathPrevious
+    PathPreviousOther
+    PathPreviousCubic
+    PathPreviousQuad
+
 // The path reader's state: the text, where it is, the commands so far,
 // and what the next command needs from the ones before it.
 struct PathScan
@@ -458,7 +462,7 @@ struct PathScan
     var sy: Float
     var qx: Float
     var qy: Float
-    var kind: Int
+    var kind: PathPrevious
 
 // The text a path fault quotes: from `i` to the next separator.
 fn path_found(d: Str, i: Int) -> Str
@@ -470,8 +474,7 @@ fn path_fault(ps: PathScan, at: Int) -> SvgFault
 // The next number of a command's arguments.
 fn path_number(var ps: PathScan) -> Result<Float, SvgFault>
     ps.i = skip_separators(ps.d, ps.i)
-    let end = number_end(ps.d, ps.i)
-    if end < 0
+    let Some(end) = number_end(ps.d, ps.i) else
         return Err(path_fault(ps, ps.i))
     let v = number_value(ps.d, ps.i, end)
     ps.i = end
@@ -491,7 +494,7 @@ fn is_command(b: Int) -> Bool
     str.contains("MmLlHhVvCcSsQqTtAaZz", str.from_byte(b))
 
 // Pushes a command and moves the pen to its end.
-fn path_emit(var ps: PathScan, c: SvgPathCmd, x: Float, y: Float, kind: Int)
+fn path_emit(var ps: PathScan, c: SvgPathCmd, x: Float, y: Float, kind: PathPrevious)
     list.push(ps.cmds, c)
     ps.cx = x
     ps.cy = y
@@ -513,69 +516,69 @@ fn path_command(var ps: PathScan, letter: Int) -> Result<Unit, SvgFault>
         letter - 32
     else
         letter
-    if up == 'M'
-        let x = ox + path_number(ps)!
-        let y = oy + path_number(ps)!
-        path_emit(ps, SvgMoveTo(x, y), x, y, 0)
-        ps.sx = x
-        ps.sy = y
-    elif up == 'L'
-        let x = ox + path_number(ps)!
-        let y = oy + path_number(ps)!
-        path_emit(ps, SvgLineTo(x, y), x, y, 0)
-    elif up == 'H'
-        let x = ox + path_number(ps)!
-        path_emit(ps, SvgLineTo(x, ps.cy), x, ps.cy, 0)
-    elif up == 'V'
-        let y = oy + path_number(ps)!
-        path_emit(ps, SvgLineTo(ps.cx, y), ps.cx, y, 0)
-    elif up == 'C' or up == 'S'
-        var x1 = if ps.kind == 1
-            2.0 * ps.cx - ps.qx
-        else
-            ps.cx
-        var y1 = if ps.kind == 1
-            2.0 * ps.cy - ps.qy
-        else
-            ps.cy
-        if up == 'C'
-            x1 = ox + path_number(ps)!
-            y1 = oy + path_number(ps)!
-        let x2 = ox + path_number(ps)!
-        let y2 = oy + path_number(ps)!
-        let x = ox + path_number(ps)!
-        let y = oy + path_number(ps)!
-        path_emit(ps, SvgCubicTo(x1, y1, x2, y2, x, y), x, y, 1)
-        ps.qx = x2
-        ps.qy = y2
-    elif up == 'Q' or up == 'T'
-        var x1 = if ps.kind == 2
-            2.0 * ps.cx - ps.qx
-        else
-            ps.cx
-        var y1 = if ps.kind == 2
-            2.0 * ps.cy - ps.qy
-        else
-            ps.cy
-        if up == 'Q'
-            x1 = ox + path_number(ps)!
-            y1 = oy + path_number(ps)!
-        let x = ox + path_number(ps)!
-        let y = oy + path_number(ps)!
-        path_emit(ps, SvgQuadTo(x1, y1, x, y), x, y, 2)
-        ps.qx = x1
-        ps.qy = y1
-    elif up == 'A'
-        let rx = math.abs(path_number(ps)!)
-        let ry = math.abs(path_number(ps)!)
-        let rot = path_number(ps)! * math.pi() / 180.0
-        let large = path_flag(ps)!
-        let sweep = path_flag(ps)!
-        let x = ox + path_number(ps)!
-        let y = oy + path_number(ps)!
-        path_emit(ps, SvgArcTo(rx, ry, rot, large, sweep, x, y), x, y, 0)
-    else
-        path_emit(ps, SvgClosePath, ps.sx, ps.sy, 0)
+    match up
+        77      =>
+            let x = ox + path_number(ps)!
+            let y = oy + path_number(ps)!
+            path_emit(ps, SvgMoveTo(x, y), x, y, PathPreviousOther)
+            ps.sx = x
+            ps.sy = y
+        76      =>
+            let x = ox + path_number(ps)!
+            let y = oy + path_number(ps)!
+            path_emit(ps, SvgLineTo(x, y), x, y, PathPreviousOther)
+        72      =>
+            let x = ox + path_number(ps)!
+            path_emit(ps, SvgLineTo(x, ps.cy), x, ps.cy, PathPreviousOther)
+        86      =>
+            let y = oy + path_number(ps)!
+            path_emit(ps, SvgLineTo(ps.cx, y), ps.cx, y, PathPreviousOther)
+        67 | 83 =>
+            var x1 = if ps.kind == PathPreviousCubic
+                2.0 * ps.cx - ps.qx
+            else
+                ps.cx
+            var y1 = if ps.kind == PathPreviousCubic
+                2.0 * ps.cy - ps.qy
+            else
+                ps.cy
+            if up == 'C'
+                x1 = ox + path_number(ps)!
+                y1 = oy + path_number(ps)!
+            let x2 = ox + path_number(ps)!
+            let y2 = oy + path_number(ps)!
+            let x = ox + path_number(ps)!
+            let y = oy + path_number(ps)!
+            path_emit(ps, SvgCubicTo(x1, y1, x2, y2, x, y), x, y, PathPreviousCubic)
+            ps.qx = x2
+            ps.qy = y2
+        81 | 84 =>
+            var x1 = if ps.kind == PathPreviousQuad
+                2.0 * ps.cx - ps.qx
+            else
+                ps.cx
+            var y1 = if ps.kind == PathPreviousQuad
+                2.0 * ps.cy - ps.qy
+            else
+                ps.cy
+            if up == 'Q'
+                x1 = ox + path_number(ps)!
+                y1 = oy + path_number(ps)!
+            let x = ox + path_number(ps)!
+            let y = oy + path_number(ps)!
+            path_emit(ps, SvgQuadTo(x1, y1, x, y), x, y, PathPreviousQuad)
+            ps.qx = x1
+            ps.qy = y1
+        65      =>
+            let rx = math.abs(path_number(ps)!)
+            let ry = math.abs(path_number(ps)!)
+            let rot = path_number(ps)! * math.pi() / 180.0
+            let large = path_flag(ps)!
+            let sweep = path_flag(ps)!
+            let x = ox + path_number(ps)!
+            let y = oy + path_number(ps)!
+            path_emit(ps, SvgArcTo(rx, ry, rot, large, sweep, x, y), x, y, PathPreviousOther)
+        _       => path_emit(ps, SvgClosePath, ps.sx, ps.sy, PathPreviousOther)
     Ok()
 
 // A path from `d`, with every fault placed at `base` plus its offset in
@@ -584,7 +587,7 @@ fn path_command(var ps: PathScan, letter: Int) -> Result<Unit, SvgFault>
 // lines.
 fn path_from(d: Str, base: Int) -> Result<SvgPath, SvgFault>
     var ps = PathScan { d: d, base: base, i: skip_separators(d, 0), cmds: [], cx: 0.0, cy: 0.0,
-                        sx: 0.0, sy: 0.0, qx: 0.0, qy: 0.0, kind: 0 }
+                        sx: 0.0, sy: 0.0, qx: 0.0, qy: 0.0, kind: PathPreviousOther }
     let n = str.len(d)
     var letter = 0
     while ps.i < n
@@ -594,7 +597,7 @@ fn path_from(d: Str, base: Int) -> Result<SvgPath, SvgFault>
                 return Err(path_fault(ps, ps.i))
             letter = b
             ps.i = ps.i + 1
-        elif letter == 0 or letter == 'Z' or letter == 'z' or number_end(d, ps.i) < 0
+        elif letter == 0 or letter == 'Z' or letter == 'z' or number_end(d, ps.i) == None
             return Err(path_fault(ps, ps.i))
         path_command(ps, letter)!
         if letter == 'M'
@@ -652,12 +655,11 @@ fn transform_from(s: Str, base: Int) -> Result<SvgTransform, SvgFault>
             i = i + 1
         if name == "" or byte_of(s, i) != '('
             return Err(SvgBadTransform(base + start, path_found(s, start)))
-        let close = str.index_from(s, ")", i) ?? 0 - 1
-        if close < 0
+        let Some(close) = str.index_from(s, ")", i) else
             return Err(SvgBadTransform(base + start, name))
         let ns = scan_numbers(str.slice(s, i + 1, close))
-        if ns.bad >= 0
-            return Err(SvgBadTransform(base + i + 1 + ns.bad, name))
+        if let Some(bad) = ns.bad
+            return Err(SvgBadTransform(base + i + 1 + bad, name))
         match transform_function(name, ns.values)
             Some(m) =>
                 acc = geomxform.compose(m, acc)
@@ -734,17 +736,19 @@ fn skip_doctype(var sc: Scan) -> Bool
     while sc.pos < n
         let b = byte(sc, sc.pos)
         sc.pos = sc.pos + 1
-        if quote != 0
-            if b == quote
-                quote = 0
-        elif b == '"' or b == '\''
-            quote = b
-        elif b == '['
-            depth = depth + 1
-        elif b == ']'
-            depth = depth - 1
-        elif b == '>' and depth <= 0
-            return true
+        match b
+            _ if quote != 0  =>
+                if b == quote
+                    quote = 0
+            34 | 39          =>
+                quote = b
+            91               =>
+                depth = depth + 1
+            93               =>
+                depth = depth - 1
+            62 if depth <= 0 =>
+                return true
+            _                => ()
     false
 
 // Moves past whitespace, a byte order mark, processing instructions,
@@ -791,24 +795,26 @@ fn found_at(s: Str, at: Int) -> Str
         j = j + 1
     str.slice(s, at, math.min(j, str.len(s)))
 
-// The digits of a character reference as a number, or -1.
-fn reference_value(digits: Str, radix: Int) -> Int
+// The digits of a character reference as a number, or `None`.
+fn reference_value(digits: Str, radix: Int) -> ?Int
     if str.len(digits) == 0 or str.len(digits) > 8
-        return 0 - 1
+        return None
     var v = 0
     for i in 0..str.len(digits)
         let b = byte_of(digits, i)
-        var d = 0 - 1
-        if is_digit(b)
-            d = b - '0'
-        elif radix == 16 and b >= 'a' and b <= 'f'
-            d = b - 'a' + 10
-        elif radix == 16 and b >= 'A' and b <= 'F'
-            d = b - 'A' + 10
-        if d < 0
-            return 0 - 1
-        v = v * radix + d
-    v
+        var d: ?Int = None
+        match radix
+            _ if is_digit(b)            =>
+                d = Some(b - '0')
+            16 if b >= 'a' and b <= 'f' =>
+                d = Some(b - 'a' + 10)
+            16 if b >= 'A' and b <= 'F' =>
+                d = Some(b - 'A' + 10)
+            _                           => ()
+        let Some(digit) = d else
+            return None
+        v = v * radix + digit
+    Some(v)
 
 // The text an entity or character reference stands for, or `None`.
 fn entity_text(name: Str) -> ?Str
@@ -828,7 +834,8 @@ fn character_reference(name: Str) -> ?Str
         2
     else
         1
-    let cp = reference_value(str.slice(name, skip, str.len(name)), (if hex then 16 else 10))
+    let Some(cp) = reference_value(str.slice(name, skip, str.len(name)), (if hex then 16 else 10)) else
+        return None
     if cp <= 0 or cp > 1114111 or cp >= 55296 and cp <= 57343
         return None
     Some(str.from_char(cp))
@@ -875,8 +882,7 @@ fn attribute(var sc: Scan, element: Str) -> Result<XAttr, SvgFault>
     if q != '"' and q != '\''
         return Err((if sc.pos >= n then SvgTruncated(n) else SvgMalformedAttribute(at, element)))
     let start = sc.pos + 1
-    let close = str.index_from(sc.text, str.from_byte(q), start) ?? 0 - 1
-    if close < 0
+    let Some(close) = str.index_from(sc.text, str.from_byte(q), start) else
         return Err(SvgTruncated(n))
     let raw = str.slice(sc.text, start, close)
     if str.contains(raw, "<")
@@ -901,20 +907,21 @@ fn element(var sc: Scan, depth: Int) -> Result<XElem, SvgFault>
         let b = byte(sc, sc.pos)
         if b < 0
             return Err(SvgTruncated(n))
-        if b == '>'
-            sc.pos = sc.pos + 1
-            open = false
-        elif b == '/'
-            if byte(sc, sc.pos + 1) != '>'
-                return Err(SvgMalformedTag(sc.pos, found_at(sc.text, sc.pos)))
-            sc.pos = sc.pos + 2
-            return Ok(XElem { name: name, at: at, attrs: attrs, kids: [] })
-        else
-            let a_at = sc.pos
-            let a = attribute(sc, name)!
-            if not spaced or has_attr(attrs, a.name)
-                return Err(SvgMalformedAttribute(a_at, name))
-            list.push(attrs, a)
+        match b
+            62 =>
+                sc.pos = sc.pos + 1
+                open = false
+            47 =>
+                if byte(sc, sc.pos + 1) != '>'
+                    return Err(SvgMalformedTag(sc.pos, found_at(sc.text, sc.pos)))
+                sc.pos = sc.pos + 2
+                return Ok(XElem { name: name, at: at, attrs: attrs, kids: [] })
+            _  =>
+                let a_at = sc.pos
+                let a = attribute(sc, name)!
+                if not spaced or has_attr(attrs, a.name)
+                    return Err(SvgMalformedAttribute(a_at, name))
+                list.push(attrs, a)
     Ok(XElem { name: name, at: at, attrs: attrs, kids: content(sc, name, depth)! })
 
 // The content of element `name` up to and including its closing tag.
@@ -1072,23 +1079,19 @@ fn unit_interval(v: Float) -> Float
 
 fn plain_number(p: XAttr) -> Result<Float, SvgFault>
     let t = str.trim(p.value)
-    let end = number_end(t, 0)
-    if end < 0 or end != str.len(t)
-        return Err(SvgBadNumber(p.at + leading_space(p.value), p.name, p.value))
-    Ok(number_value(t, 0, end))
+    match number_end(t, 0)
+        Some(end) if end == str.len(t) => Ok(number_value(t, 0, end))
+        _                              => Err(SvgBadNumber(p.at + leading_space(p.value), p.name, p.value))
 
 // A `font-weight`, given the parent's.  `bolder` and `lighter` follow
-// the table in CSS Fonts 3 section 3.2; any other keyword answers -1.
-fn weight_of(v: Str, parent: Int) -> Int
-    if v == "normal"
-        return 400
-    if v == "bold"
-        return 700
-    if v == "bolder"
-        return if parent < 400 then 400 elif parent < 600 then 700 else 900
-    if v == "lighter"
-        return if parent < 600 then 100 elif parent < 800 then 400 else 700
-    str.to_int(v) ?? 0 - 1
+// the table in CSS Fonts 3 section 3.2; any other keyword answers `None`.
+fn weight_of(v: Str, parent: Int) -> ?Int
+    match v
+        "normal"  => Some(400)
+        "bold"    => Some(700)
+        "bolder"  => Some((if parent < 400 then 400 elif parent < 600 then 700 else 900))
+        "lighter" => Some((if parent < 600 then 100 elif parent < 800 then 400 else 700))
+        _         => str.to_int(v)
 
 // Applies one presentation attribute or style declaration.  A number
 // that is not one is a fault; a keyword or a colour this reader does
@@ -1097,12 +1100,13 @@ fn apply_prop(var h: Inh, p: XAttr, ctx: Ctx, var t: Tally) -> Result<Unit, SvgF
     let v = str.trim(p.value)
     if v == "inherit"
         return Ok()
-    let known = apply_keyword(h, p.name, v)
-    if known == 1
-        return Ok()
-    if known == 0
-        t.attributes = t.attributes + 1
-        return Ok()
+    match apply_keyword(h, p.name, v)
+        KeywordApplied =>
+            return Ok()
+        KeywordSkipped =>
+            t.attributes = t.attributes + 1
+            return Ok()
+        KeywordForeign => ()
     match p.name
         "fill-opacity"      =>
             h.fill_opacity = unit_interval(plain_number(p)!)
@@ -1126,89 +1130,95 @@ fn apply_prop(var h: Inh, p: XAttr, ctx: Ctx, var t: Tally) -> Result<Unit, SvgF
             t.attributes = t.attributes + 1
     Ok()
 
-// Applies an attribute whose value is a keyword, a colour or a name.
-// Answers 1 when it applied, 0 when the value was not one the
-// attribute takes, and -1 when the attribute is not one of these.
-fn apply_keyword(var h: Inh, name: Str, v: Str) -> Int
-    if name == "fill" or name == "stroke" or name == "color"
-        return apply_colour(h, name, v)
-    if name == "stroke-linecap"
-        match v
-            "butt"   =>
-                h.cap = SvgCapButt
-            "round"  =>
-                h.cap = SvgCapRound
-            "square" =>
-                h.cap = SvgCapSquare
-            _        =>
-                return 0
-        return 1
-    if name == "stroke-linejoin"
-        match v
-            "miter" =>
-                h.join = SvgJoinMiter
-            "round" =>
-                h.join = SvgJoinRound
-            "bevel" =>
-                h.join = SvgJoinBevel
-            _       =>
-                return 0
-        return 1
-    if name == "fill-rule"
-        match v
-            "nonzero" =>
-                h.fill_rule = GeomNonZero
-            "evenodd" =>
-                h.fill_rule = GeomEvenOdd
-            _         =>
-                return 0
-        return 1
-    if name == "text-anchor"
-        match v
-            "start"  =>
-                h.anchor = SvgAnchorStart
-            "middle" =>
-                h.anchor = SvgAnchorMiddle
-            "end"    =>
-                h.anchor = SvgAnchorEnd
-            _        =>
-                return 0
-        return 1
-    if name == "font-style"
-        match v
-            "normal"  =>
-                h.italic = false
-            "italic"  =>
-                h.italic = true
-            "oblique" =>
-                h.italic = true
-            _         =>
-                return 0
-        return 1
-    if name == "font-family"
-        h.family = v
-        return 1
-    if name == "font-weight"
-        let w = weight_of(v, h.weight)
-        if w < 1 or w > 1000
-            return 0
-        h.weight = w
-        return 1
-    0 - 1
+// What applying a keyword attribute came to: it applied, the value was
+// not one the attribute takes, or the attribute is not one of these.
+enum KeywordOutcome
+    KeywordApplied
+    KeywordSkipped
+    KeywordForeign
 
-fn apply_colour(var h: Inh, name: Str, v: Str) -> Int
-    let Some(paint) = paint_from(v, h.color) else return 0
-    if name == "fill"
-        h.fill = paint
-    elif name == "stroke"
-        h.stroke = paint
-    else
-        match paint
-            SvgPaintColor(c) =>
-                h.color = c
-            _                =>
-                return 0
-    1
+// Applies an attribute whose value is a keyword, a colour or a name.
+fn apply_keyword(var h: Inh, name: Str, v: Str) -> KeywordOutcome
+    match name
+        "fill" | "stroke" | "color" => apply_colour(h, name, v)
+        "stroke-linecap"            =>
+            match v
+                "butt"   =>
+                    h.cap = SvgCapButt
+                "round"  =>
+                    h.cap = SvgCapRound
+                "square" =>
+                    h.cap = SvgCapSquare
+                _        =>
+                    return KeywordSkipped
+            KeywordApplied
+        "stroke-linejoin"           =>
+            match v
+                "miter" =>
+                    h.join = SvgJoinMiter
+                "round" =>
+                    h.join = SvgJoinRound
+                "bevel" =>
+                    h.join = SvgJoinBevel
+                _       =>
+                    return KeywordSkipped
+            KeywordApplied
+        "fill-rule"                 =>
+            match v
+                "nonzero" =>
+                    h.fill_rule = GeomNonZero
+                "evenodd" =>
+                    h.fill_rule = GeomEvenOdd
+                _         =>
+                    return KeywordSkipped
+            KeywordApplied
+        "text-anchor"               =>
+            match v
+                "start"  =>
+                    h.anchor = SvgAnchorStart
+                "middle" =>
+                    h.anchor = SvgAnchorMiddle
+                "end"    =>
+                    h.anchor = SvgAnchorEnd
+                _        =>
+                    return KeywordSkipped
+            KeywordApplied
+        "font-style"                =>
+            match v
+                "normal"  =>
+                    h.italic = false
+                "italic"  =>
+                    h.italic = true
+                "oblique" =>
+                    h.italic = true
+                _         =>
+                    return KeywordSkipped
+            KeywordApplied
+        "font-family"               =>
+            h.family = v
+            KeywordApplied
+        "font-weight"               =>
+            match weight_of(v, h.weight)
+                Some(w) if w >= 1 and w <= 1000 =>
+                    h.weight = w
+                    KeywordApplied
+                _                               => KeywordSkipped
+        _                           => KeywordForeign
+
+fn apply_colour(var h: Inh, name: Str, v: Str) -> KeywordOutcome
+    let Some(paint) = paint_from(v, h.color) else return KeywordSkipped
+    match name
+        "fill"   =>
+            h.fill = paint
+        "stroke" =>
+            h.stroke = paint
+        _        =>
+            match paint
+                SvgPaintColor(c) =>
+                    h.color = c
+                _                =>
+                    return KeywordSkipped
+    KeywordApplied
 
 // The declarations of a `style` attribute as attributes, each placed at
 // its value's offset in the input.
@@ -1216,11 +1226,12 @@ fn style_declarations(a: XAttr) -> [XAttr]
     var out: [XAttr] = []
     var start = 0
     for part in str.split(a.value, ";")
-        let colon = str.index(part, ":") ?? 0 - 1
-        if colon > 0
-            let name = str.trim(str.slice(part, 0, colon))
-            let value = str.slice(part, colon + 1, str.len(part))
-            list.push(out, XAttr { name: name, value: value, at: a.at + start + colon + 1 })
+        match str.index(part, ":")
+            Some(colon) if colon > 0 =>
+                let name = str.trim(str.slice(part, 0, colon))
+                let value = str.slice(part, colon + 1, str.len(part))
+                list.push(out, XAttr { name: name, value: value, at: a.at + start + colon + 1 })
+            _                        => ()
         start = start + str.len(part) + 1
     out
 

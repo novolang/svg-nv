@@ -1,8 +1,6 @@
 // svg_tests.nv — the API suite for the document, the style and the
 // path.
 //
-// RED ON PURPOSE: every body is a `todo()`.
-//
 // WHERE THE CASES COME FROM.  usvg's contract, stated as assertions: a
 // parsed document carries absolute styles, paths are absolute and
 // shorthand-free, and a shape is still a shape.  Each case fixes a
