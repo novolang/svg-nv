@@ -38,6 +38,7 @@ use geompoint
 use geomxform
 use srgb
 use colortext
+use svgfault
 
 // What a parse left behind.
 //
@@ -243,7 +244,7 @@ pub fn parse_dash_array(s: Str) -> Result<[Float], SvgFault>
 // ```
 pub fn looks_like_svg(text: Str) -> Bool
     var sc = Scan { text: text, pos: 0, max_depth: 0 }
-    let _ = skip_misc(sc)
+    let _ = skip_misc(var sc)
     if not at_text(sc, "<svg")
         return false
     let b = byte(sc, sc.pos + 4)
@@ -518,21 +519,21 @@ fn path_command(var ps: PathScan, letter: Int) -> Result<Unit, SvgFault>
         letter
     match up
         77      =>
-            let x = ox + path_number(ps)!
-            let y = oy + path_number(ps)!
-            path_emit(ps, SvgMoveTo(x, y), x, y, PathPreviousOther)
+            let x = ox + path_number(var ps)!
+            let y = oy + path_number(var ps)!
+            path_emit(var ps, SvgMoveTo(x, y), x, y, PathPreviousOther)
             ps.sx = x
             ps.sy = y
         76      =>
-            let x = ox + path_number(ps)!
-            let y = oy + path_number(ps)!
-            path_emit(ps, SvgLineTo(x, y), x, y, PathPreviousOther)
+            let x = ox + path_number(var ps)!
+            let y = oy + path_number(var ps)!
+            path_emit(var ps, SvgLineTo(x, y), x, y, PathPreviousOther)
         72      =>
-            let x = ox + path_number(ps)!
-            path_emit(ps, SvgLineTo(x, ps.cy), x, ps.cy, PathPreviousOther)
+            let x = ox + path_number(var ps)!
+            path_emit(var ps, SvgLineTo(x, ps.cy), x, ps.cy, PathPreviousOther)
         86      =>
-            let y = oy + path_number(ps)!
-            path_emit(ps, SvgLineTo(ps.cx, y), ps.cx, y, PathPreviousOther)
+            let y = oy + path_number(var ps)!
+            path_emit(var ps, SvgLineTo(ps.cx, y), ps.cx, y, PathPreviousOther)
         67 | 83 =>
             var x1 = if ps.kind == PathPreviousCubic
                 2.0 * ps.cx - ps.qx
@@ -543,13 +544,13 @@ fn path_command(var ps: PathScan, letter: Int) -> Result<Unit, SvgFault>
             else
                 ps.cy
             if up == 'C'
-                x1 = ox + path_number(ps)!
-                y1 = oy + path_number(ps)!
-            let x2 = ox + path_number(ps)!
-            let y2 = oy + path_number(ps)!
-            let x = ox + path_number(ps)!
-            let y = oy + path_number(ps)!
-            path_emit(ps, SvgCubicTo(x1, y1, x2, y2, x, y), x, y, PathPreviousCubic)
+                x1 = ox + path_number(var ps)!
+                y1 = oy + path_number(var ps)!
+            let x2 = ox + path_number(var ps)!
+            let y2 = oy + path_number(var ps)!
+            let x = ox + path_number(var ps)!
+            let y = oy + path_number(var ps)!
+            path_emit(var ps, SvgCubicTo(x1, y1, x2, y2, x, y), x, y, PathPreviousCubic)
             ps.qx = x2
             ps.qy = y2
         81 | 84 =>
@@ -562,23 +563,23 @@ fn path_command(var ps: PathScan, letter: Int) -> Result<Unit, SvgFault>
             else
                 ps.cy
             if up == 'Q'
-                x1 = ox + path_number(ps)!
-                y1 = oy + path_number(ps)!
-            let x = ox + path_number(ps)!
-            let y = oy + path_number(ps)!
-            path_emit(ps, SvgQuadTo(x1, y1, x, y), x, y, PathPreviousQuad)
+                x1 = ox + path_number(var ps)!
+                y1 = oy + path_number(var ps)!
+            let x = ox + path_number(var ps)!
+            let y = oy + path_number(var ps)!
+            path_emit(var ps, SvgQuadTo(x1, y1, x, y), x, y, PathPreviousQuad)
             ps.qx = x1
             ps.qy = y1
         65      =>
-            let rx = math.abs(path_number(ps)!)
-            let ry = math.abs(path_number(ps)!)
-            let rot = path_number(ps)! * math.pi() / 180.0
-            let large = path_flag(ps)!
-            let sweep = path_flag(ps)!
-            let x = ox + path_number(ps)!
-            let y = oy + path_number(ps)!
-            path_emit(ps, SvgArcTo(rx, ry, rot, large, sweep, x, y), x, y, PathPreviousOther)
-        _       => path_emit(ps, SvgClosePath, ps.sx, ps.sy, PathPreviousOther)
+            let rx = math.abs(path_number(var ps)!)
+            let ry = math.abs(path_number(var ps)!)
+            let rot = path_number(var ps)! * math.pi() / 180.0
+            let large = path_flag(var ps)!
+            let sweep = path_flag(var ps)!
+            let x = ox + path_number(var ps)!
+            let y = oy + path_number(var ps)!
+            path_emit(var ps, SvgArcTo(rx, ry, rot, large, sweep, x, y), x, y, PathPreviousOther)
+        _       => path_emit(var ps, SvgClosePath, ps.sx, ps.sy, PathPreviousOther)
     Ok()
 
 // A path from `d`, with every fault placed at `base` plus its offset in
@@ -599,7 +600,7 @@ fn path_from(d: Str, base: Int) -> Result<SvgPath, SvgFault>
             ps.i = ps.i + 1
         elif letter == 0 or letter == 'Z' or letter == 'z' or number_end(d, ps.i) == None
             return Err(path_fault(ps, ps.i))
-        path_command(ps, letter)!
+        path_command(var ps, letter)!
         if letter == 'M'
             letter = 'L'
         if letter == 'm'
@@ -757,17 +758,17 @@ fn skip_doctype(var sc: Scan) -> Bool
 fn skip_misc(var sc: Scan) -> Bool
     var more = true
     while more
-        skip_spaces(sc)
+        skip_spaces(var sc)
         if at_text(sc, "\u{feff}")
             sc.pos = sc.pos + 3
         elif at_text(sc, "<?")
-            if not skip_past(sc, "?>")
+            if not skip_past(var sc, "?>")
                 return false
         elif at_text(sc, "<!--")
-            if not skip_past(sc, "-->")
+            if not skip_past(var sc, "-->")
                 return false
         elif at_text(sc, "<!DOCTYPE")
-            if not skip_doctype(sc)
+            if not skip_doctype(var sc)
                 return false
         else
             more = false
@@ -872,12 +873,12 @@ fn has_attr(attrs: [XAttr], name: Str) -> Bool
 fn attribute(var sc: Scan, element: Str) -> Result<XAttr, SvgFault>
     let at = sc.pos
     let n = str.len(sc.text)
-    let name = read_name(sc)
-    skip_spaces(sc)
+    let name = read_name(var sc)
+    skip_spaces(var sc)
     if name == "" or byte(sc, sc.pos) != '='
         return Err((if sc.pos >= n then SvgTruncated(n) else SvgMalformedAttribute(at, element)))
     sc.pos = sc.pos + 1
-    skip_spaces(sc)
+    skip_spaces(var sc)
     let q = byte(sc, sc.pos)
     if q != '"' and q != '\''
         return Err((if sc.pos >= n then SvgTruncated(n) else SvgMalformedAttribute(at, element)))
@@ -897,13 +898,13 @@ fn element(var sc: Scan, depth: Int) -> Result<XElem, SvgFault>
     if depth > sc.max_depth
         return Err(SvgTooDeep(at, sc.max_depth))
     sc.pos = sc.pos + 1
-    let name = read_name(sc)
+    let name = read_name(var sc)
     if name == ""
         return Err(SvgMalformedTag(at, found_at(sc.text, at)))
     var attrs: [XAttr] = []
     var open = true
     while open
-        let spaced = skip_spaces(sc)
+        let spaced = skip_spaces(var sc)
         let b = byte(sc, sc.pos)
         if b < 0
             return Err(SvgTruncated(n))
@@ -918,11 +919,11 @@ fn element(var sc: Scan, depth: Int) -> Result<XElem, SvgFault>
                 return Ok(XElem { name: name, at: at, attrs: attrs, kids: [] })
             _  =>
                 let a_at = sc.pos
-                let a = attribute(sc, name)!
+                let a = attribute(var sc, name)!
                 if not spaced or has_attr(attrs, a.name)
                     return Err(SvgMalformedAttribute(a_at, name))
                 list.push(attrs, a)
-    Ok(XElem { name: name, at: at, attrs: attrs, kids: content(sc, name, depth)! })
+    Ok(XElem { name: name, at: at, attrs: attrs, kids: content(var sc, name, depth)! })
 
 // The content of element `name` up to and including its closing tag.
 fn content(var sc: Scan, name: Str, depth: Int) -> Result<[XNode], SvgFault>
@@ -935,8 +936,8 @@ fn content(var sc: Scan, name: Str, depth: Int) -> Result<[XNode], SvgFault>
         if at_text(sc, "</")
             let close_at = sc.pos
             sc.pos = sc.pos + 2
-            let closed = read_name(sc)
-            skip_spaces(sc)
+            let closed = read_name(var sc)
+            skip_spaces(var sc)
             if byte(sc, sc.pos) != '>'
                 if sc.pos >= n
                     return Err(SvgTruncated(n))
@@ -946,15 +947,15 @@ fn content(var sc: Scan, name: Str, depth: Int) -> Result<[XNode], SvgFault>
                 return Err(SvgMismatchedTag(close_at, name, closed))
             open = false
         elif at_text(sc, "<!--")
-            if not skip_past(sc, "-->")
+            if not skip_past(var sc, "-->")
                 return Err(SvgTruncated(n))
         elif at_text(sc, "<![CDATA[")
             let start = sc.pos + 9
-            if not skip_past(sc, "]]>")
+            if not skip_past(var sc, "]]>")
                 return Err(SvgTruncated(n))
             list.push(kids, XText(str.slice(sc.text, start, sc.pos - 3)))
         elif at_text(sc, "<?")
-            if not skip_past(sc, "?>")
+            if not skip_past(var sc, "?>")
                 return Err(SvgTruncated(n))
         elif at_text(sc, "<!")
             return Err(SvgMalformedTag(sc.pos, found_at(sc.text, sc.pos)))
@@ -973,7 +974,7 @@ fn top_elements(var sc: Scan) -> Result<[XElem], SvgFault>
     var tops: [XElem] = []
     let n = str.len(sc.text)
     while sc.pos < n
-        if not skip_misc(sc)
+        if not skip_misc(var sc)
             return Err(SvgTruncated(n))
         if at_text(sc, "<")
             list.push(tops, element(sc, 1)!)
@@ -1100,7 +1101,7 @@ fn apply_prop(var h: Inh, p: XAttr, ctx: Ctx, var t: Tally) -> Result<Unit, SvgF
     let v = str.trim(p.value)
     if v == "inherit"
         return Ok()
-    match apply_keyword(h, p.name, v)
+    match apply_keyword(var h, p.name, v)
         KeywordApplied =>
             return Ok()
         KeywordSkipped =>
@@ -1140,7 +1141,7 @@ enum KeywordOutcome
 // Applies an attribute whose value is a keyword, a colour or a name.
 fn apply_keyword(var h: Inh, name: Str, v: Str) -> KeywordOutcome
     match name
-        "fill" | "stroke" | "color" => apply_colour(h, name, v)
+        "fill" | "stroke" | "color" => apply_colour(var h, name, v)
         "stroke-linecap"            =>
             match v
                 "butt"   =>
@@ -1277,9 +1278,9 @@ fn element_inh(el: XElem, parent: Inh, ctx: Ctx, var t: Tally,
             t.attributes = t.attributes + 1
     let all = list.concat(props, declared)
     for p in list.filter(all, a => a.name == "color")
-        apply_prop(h, p, ctx, t)!
+        apply_prop(var h, p, ctx, var t)!
     for p in list.filter(all, a => a.name != "color")
-        apply_prop(h, p, ctx, t)!
+        apply_prop(var h, p, ctx, var t)!
     Ok(h)
 
 // A paint with an opacity folded into its colour's alpha.
@@ -1332,8 +1333,8 @@ fn text_of(el: XElem, var t: Tally) -> Str
             XText(s)  =>
                 out = out + s
             XChild(c) =>
-                skip_element(t, c.name)
-                out = out + text_of(c, t)
+                skip_element(var t, c.name)
+                out = out + text_of(c, var t)
     out
 
 // Text with SVG 1.1's default white-space handling (section 10.15):
@@ -1382,7 +1383,7 @@ fn shape_of(el: XElem, h: Inh, ctx: Ctx, var t: Tally) -> Result<SvgShape, SvgFa
             match attr_of(el, "d")
                 Some(a) => Ok(SvgPathShape(path_from(a.value, a.at)!))
                 None    => Ok(SvgPathShape(svgpath.empty()))
-        "text"     => Ok(SvgTextShape(collapse_space(text_of(el, t)),
+        "text"     => Ok(SvgTextShape(collapse_space(text_of(el, var t)),
                                       first_length(el, "x", w, size)!,
                                       first_length(el, "y", v, size)!))
         _          => Ok(SvgGroupShape)
@@ -1396,17 +1397,17 @@ fn points_attr(el: XElem) -> Result<[GeomPointF], SvgFault>
 fn node_of(el: XElem, parent: Inh, ctx: Ctx, var t: Tally) -> Result<?SvgNode, SvgFault>
     let known = geometry_names(el.name)
     if known == None
-        skip_element(t, el.name)
+        skip_element(var t, el.name)
         return Ok(None)
     let geometry = known ?? []
-    let h = element_inh(el, parent, ctx, t, geometry)!
-    let style = style_of(h, t)
+    let h = element_inh(el, parent, ctx, var t, geometry)!
+    let style = style_of(h, var t)
     let transform = transform_of(el)!
     let id = match attr_of(el, "id")
         Some(a) => a.value
         None    => ""
-    let shape = shape_of(el, h, ctx, t)!
-    let kids = children_of(el, shape, h, ctx, t)!
+    let shape = shape_of(el, h, ctx, var t)!
+    let kids = children_of(el, shape, h, ctx, var t)!
     Ok(Some(SvgNode { shape: shape, style: style, transform: transform, id: id,
                       children: kids }))
 
@@ -1421,18 +1422,18 @@ fn transform_of(el: XElem) -> Result<SvgTransform, SvgFault>
 fn children_of(el: XElem, shape: SvgShape, h: Inh, ctx: Ctx,
                var t: Tally) -> Result<[SvgNode], SvgFault>
     match shape
-        SvgGroupShape         => nodes_of(el, h, ctx, t)
+        SvgGroupShape         => nodes_of(el, h, ctx, var t)
         SvgTextShape(_, _, _) => Ok([])
         _                     =>
             for c in child_elements(el)
-                skip_element(t, c.name)
+                skip_element(var t, c.name)
             Ok([])
 
 // The nodes of an element's children.
 fn nodes_of(el: XElem, h: Inh, ctx: Ctx, var t: Tally) -> Result<[SvgNode], SvgFault>
     var out: [SvgNode] = []
     for c in child_elements(el)
-        if let Some(n) = node_of(c, h, ctx, t)!
+        if let Some(n) = node_of(c, h, ctx, var t)!
             list.push(out, n)
     Ok(out)
 
@@ -1458,7 +1459,7 @@ fn root_view_box(root: XElem, w: SvgLength, h: SvgLength) -> Result<SvgViewBox, 
 // The document in `text`, and what reading it skipped.
 fn read_document(text: Str, max_depth: Int) -> Result<SvgReadReport, SvgFault>
     var sc = Scan { text: text, pos: 0, max_depth: max_depth }
-    let tops = top_elements(sc)!
+    let tops = top_elements(var sc)!
     let root = find_svg(tops) ?? XElem { name: "", at: 0, attrs: [], kids: [] }
     if root.name == ""
         return Err(SvgNoRootElement(0))
@@ -1467,8 +1468,8 @@ fn read_document(text: Str, max_depth: Int) -> Result<SvgReadReport, SvgFault>
     let h = root_length(root, "height")!
     let vb = root_view_box(root, w, h)!
     let ctx = Ctx { vw: vb.width, vh: vb.height }
-    let inh = element_inh(root, initial_inh(), ctx, t, ["width", "height", "viewBox"])!
-    let kids = nodes_of(root, inh, ctx, t)!
+    let inh = element_inh(root, initial_inh(), ctx, var t, ["width", "height", "viewBox"])!
+    let kids = nodes_of(root, inh, ctx, var t)!
     Ok(SvgReadReport { document: svgdoc.document_with(w, h, vb, kids),
                        skipped_elements: t.elements, skipped_attributes: t.attributes,
                        skipped_names: t.names, has_dangling_paint: t.dangling })

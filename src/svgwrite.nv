@@ -30,6 +30,7 @@ use svgdoc
 use svgpath
 use svgstyle
 use svgnum
+use svgfault
 
 // How a document is written out.
 //
@@ -598,7 +599,7 @@ fn node_attrs(n: SvgNode, parent: [Str], st: SvgWriteStyle) -> [Attr]
     var attrs: [Attr] = []
     if n.id != ""
         list.push(attrs, attr("id", n.id, false))
-    shape_attrs(attrs, n.shape, st)
+    shape_attrs(var attrs, n.shape, st)
     let t = transform_attr(n.transform, d)
     if t != ""
         list.push(attrs, attr("transform", t, true))

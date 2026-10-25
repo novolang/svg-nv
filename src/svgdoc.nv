@@ -578,7 +578,7 @@ pub fn has_id(n: SvgNode, id: Str) -> Bool
 // ```
 pub fn walk(n: SvgNode) -> [SvgNode]
     var out: [SvgNode] = []
-    walk_into(out, n)
+    walk_into(var out, n)
     out
 
 // The same subtree with every transform composed down from the root and
@@ -671,7 +671,7 @@ pub fn text_advance_estimate(content: Str, font_size: Float) -> Float
 // ```
 pub fn to_path(n: SvgNode) -> SvgPath
     var cs: [SvgPathCmd] = []
-    path_into(cs, n, geomxform.identity())
+    path_into(var cs, n, geomxform.identity())
     svgpath.of_commands(cs)
 
 fn node(shape: SvgShape, style: SvgStyle, children: [SvgNode]) -> SvgNode
@@ -681,7 +681,7 @@ fn node(shape: SvgShape, style: SvgStyle, children: [SvgNode]) -> SvgNode
 fn walk_into(var out: [SvgNode], n: SvgNode)
     list.push(out, n)
     for k in n.children
-        walk_into(out, k)
+        walk_into(var out, k)
 
 // The subtree with `outer`, the transform its ancestors compose to,
 // composed into every node.  A group keeps no transform of its own.
@@ -767,4 +767,4 @@ fn path_into(var out: [SvgPathCmd], n: SvgNode, outer: GeomXform)
     list.append(out, svgpath.commands_of(svgpath.transform(outline(n.shape), total)))
     if not is_leaf(n)
         for k in n.children
-            path_into(out, k, total)
+            path_into(var out, k, total)

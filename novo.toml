@@ -1,6 +1,6 @@
 [package]
 name        = "svg-nv"
-version     = "0.1.0"
+version     = "0.1.1"
 description = "SVG as a value: a document tree of shapes with their presentation attributes, paths as a typed command list rather than a string, a writer that never holds the whole document, and a reader for the subset a program round-trips."
 license     = "Apache-2.0"
 
@@ -22,7 +22,7 @@ category    = "graphics"
 tags        = ["svg", "vector", "xml", "path", "usvg", "svgwrite", "drawing"]
 repository  = "https://github.com/novolang/svg-nv"
 maintainers = ["novo-lang"]
-novo        = ">= 0.14.0"
+novo        = ">= 0.21.1"
 
 # A library: no `main`, so `novo pkg build` type-checks and
 # effect-checks every module under `src/` and writes no binary.

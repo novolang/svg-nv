@@ -422,13 +422,13 @@ pub fn flatten(p: SvgPath, tolerance: Float) -> [SvgSubpath]
                 list.push(pts, geompoint.ptf(x, y))
                 drew = started
             SvgQuadTo(x1, y1, x, y)                   =>
-                quad_points(pts, from, x1, y1, x, y, tolerance)
+                quad_points(var pts, from, x1, y1, x, y, tolerance)
                 drew = started
             SvgCubicTo(x1, y1, x2, y2, x, y)          =>
-                cubic_points(pts, from, x1, y1, x2, y2, x, y, tolerance)
+                cubic_points(var pts, from, x1, y1, x2, y2, x, y, tolerance)
                 drew = started
             SvgArcTo(rx, ry, rot, large, sweep, x, y) =>
-                arc_points(pts, from, rx, ry, rot, large, sweep, x, y, tolerance)
+                arc_points(var pts, from, rx, ry, rot, large, sweep, x, y, tolerance)
                 drew = started
     if drew
         list.push(runs, SvgSubpath { points: pts, closed: false })

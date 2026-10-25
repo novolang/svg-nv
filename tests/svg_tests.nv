@@ -23,6 +23,7 @@ use svgpath
 use svgdoc
 use svgwrite
 use svgread
+use svgfault
 
 @test
 fn test_svgs_default_style_is_the_trap() [io]
